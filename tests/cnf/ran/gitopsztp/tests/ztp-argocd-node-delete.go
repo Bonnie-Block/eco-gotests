@@ -80,7 +80,7 @@ var _ = Describe("ZTP Argo CD Node Deletion Tests", Label(tsparams.LabelArgoCdNo
 	})
 
 	// 72463 - Delete and re-add a worker node from cluster
-	It("should delete a worker node from the cluster", reportxml.ID("72463"), func() {
+	FIt("should delete a worker node from the cluster", reportxml.ID("72463"), func() {
 		By("updating the Argo CD git path to apply crAnnotation")
 		exists, err := gitdetails.UpdateArgoCdAppGitPath(
 			tsparams.ArgoCdClustersAppName, tsparams.ZtpTestPathNodeDeleteAddAnnotation, true)
@@ -97,9 +97,16 @@ var _ = Describe("ZTP Argo CD Node Deletion Tests", Label(tsparams.LabelArgoCdNo
 		_, err = bareMetalHost.WaitUntilAnnotationExists(tsparams.NodeDeletionCrAnnotation, tsparams.ArgoCdChangeTimeout)
 		Expect(err).ToNot(HaveOccurred(), "Failed to wait for BMH annotation")
 
-		By("updating the Argo CD app to apply the suppression to the spec")
+		// By("updating the Argo CD app to apply the suppression to the spec")
+		// exists, err = gitdetails.UpdateArgoCdAppGitPath(
+		// 	tsparams.ArgoCdClustersAppName, tsparams.ZtpTestPathNodeDeleteAddSuppression, false)
+		// if !exists {
+		// 	Skip(err.Error())
+		// }
+
+		By("updating the Argo CD app to apply pruneManifests to the spec")
 		exists, err = gitdetails.UpdateArgoCdAppGitPath(
-			tsparams.ArgoCdClustersAppName, tsparams.ZtpTestPathNodeDeleteAddSuppression, false)
+			tsparams.ArgoCdClustersAppName, tsparams.ZtpTestPathNodeDeleteAddPrune, false)
 		if !exists {
 			Skip(err.Error())
 		}

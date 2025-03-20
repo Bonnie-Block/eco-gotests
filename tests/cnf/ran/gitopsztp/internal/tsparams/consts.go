@@ -74,10 +74,12 @@ const (
 	ZtpTestPathTemplatingValid = "ztp-test/hub-templating-valid"
 	// ZtpTestPathTemplatingValid416 is the git path for the templating valid test starting from TALM 4.16.
 	ZtpTestPathTemplatingValid416 = "ztp-test/hub-templating-valid-4.16"
-	// ZtpTestPathNodeDeleteAddAnnotation is the git path for the node deletion add annotation test.
+	// ZtpTestPathNodeDeleteAddAnnotation is the git path for the node deletion test.
 	ZtpTestPathNodeDeleteAddAnnotation = "ztp-test/node-delete/add-annotation"
-	// ZtpTestPathNodeDeleteAddSuppression is the git path for the node deletion add suppression test.
+	// ZtpTestPathNodeDeleteAddSuppression is the git path for the node deletion test for SiteConfig nodes.
 	ZtpTestPathNodeDeleteAddSuppression = "ztp-test/node-delete/add-suppression"
+	// ZtpTestPathNodeDeleteAddPrune is the git path for the node deletion test for ClusterInstance nodes.
+	ZtpTestPathNodeDeleteAddPrune = "ztp-test/node-delete/add-prune"
 	// ZtpTestPathCustomInterval is the git path for the policies app custom interval test.
 	ZtpTestPathCustomInterval = "ztp-test/custom-interval"
 	// ZtpTestPathInvalidInterval is the git path for the policies app invalid interval test.
