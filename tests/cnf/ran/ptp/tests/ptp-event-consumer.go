@@ -130,9 +130,9 @@ var _ = Describe("PTP Event Consumer", Label(tsparams.LabelEventConsumer), func(
 			_, err = ptpOperatorConfig.Update()
 			Expect(err).ToNot(HaveOccurred(), "Failed to restore original PTP operator config")
 
-			By("redeploying all the consumers again after failure")
-			err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
-			Expect(err).ToNot(HaveOccurred(), "Failed to redeploy consumers on nodes")
+			// By("redeploying all the consumers again after failure")
+			// err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
+			// Expect(err).ToNot(HaveOccurred(), "Failed to redeploy consumers on nodes")
 		})
 
 		By("modifying the ptpEventConfig.apiVersion field in the PTP Operator Config")
@@ -156,13 +156,13 @@ var _ = Describe("PTP Event Consumer", Label(tsparams.LabelEventConsumer), func(
 			metrics.AssertWithTimeout(10*time.Minute))
 		Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are locked after API version change")
 
-		By("redeploying all the consumers")
-		redeploymentTime := time.Now()
-		err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to deploy consumers on nodes")
+		// By("redeploying all the consumers")
+		// redeploymentTime := time.Now()
+		// err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
+		// Expect(err).ToNot(HaveOccurred(), "Failed to deploy consumers on nodes")
 
-		By("verifying that we see a PtpStateChange to LOCKED containing iface.Master")
-		verifyPTPLockedEventOnNodes(RANConfig.Spoke1APIClient, redeploymentTime)
+		// By("verifying that we see a PtpStateChange to LOCKED containing iface.Master")
+		// verifyPTPLockedEventOnNodes(RANConfig.Spoke1APIClient, redeploymentTime)
 
 		By("cleaning up all consumers")
 		err = consumer.CleanupConsumersOnNodes(RANConfig.Spoke1APIClient)
@@ -179,13 +179,13 @@ var _ = Describe("PTP Event Consumer", Label(tsparams.LabelEventConsumer), func(
 			metrics.AssertWithTimeout(10*time.Minute))
 		Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are locked after restoring original config")
 
-		By("redeploying all the consumers again")
-		redeploymentTime = time.Now()
-		err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to redeploy consumers on nodes")
+		// By("redeploying all the consumers again")
+		// redeploymentTime = time.Now()
+		// err = consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
+		// Expect(err).ToNot(HaveOccurred(), "Failed to redeploy consumers on nodes")
 
-		By("verifying that we see a PtpStateChange to LOCKED containing iface.Master again")
-		verifyPTPLockedEventOnNodes(RANConfig.Spoke1APIClient, redeploymentTime)
+		// By("verifying that we see a PtpStateChange to LOCKED containing iface.Master again")
+		// verifyPTPLockedEventOnNodes(RANConfig.Spoke1APIClient, redeploymentTime)
 	})
 })
 

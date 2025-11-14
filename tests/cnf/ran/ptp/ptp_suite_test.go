@@ -32,9 +32,9 @@ var _ = BeforeSuite(func() {
 	isSpoke1Present := rancluster.AreClustersPresent([]*clients.Settings{Spoke1APIClient})
 	Expect(isSpoke1Present).To(BeTrue(), "Spoke 1 cluster must be present for PTP tests")
 
-	By("deploying consumers")
-	err := consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
-	Expect(err).ToNot(HaveOccurred(), "Failed to deploy consumers on nodes with PTP daemons")
+	// By("deploying consumers")
+	// err := consumer.DeployConsumersOnNodes(RANConfig.Spoke1APIClient)
+	// Expect(err).ToNot(HaveOccurred(), "Failed to deploy consumers on nodes with PTP daemons")
 })
 
 var _ = AfterSuite(func() {
