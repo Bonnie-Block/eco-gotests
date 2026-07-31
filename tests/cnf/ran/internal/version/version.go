@@ -1,6 +1,7 @@
 package version
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,9 +13,18 @@ import (
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/olm"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/ranparam"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/internal/cluster"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 )
+
+var clusterExtensionGVR = schema.GroupVersionResource{
+	Group:    "olm.operatorframework.io",
+	Version:  "v1",
+	Resource: "clusterextensions",
+}
 
 // GetOCPVersion uses the cluster version on a given cluster to find the latest OCP version, returning the desired
 // version if the latest version could not be found.
@@ -63,8 +73,38 @@ func GetClusterName(kubeconfigPath string) (string, error) {
 	return "", fmt.Errorf("could not get cluster name for kubeconfig at %s", kubeconfigPath)
 }
 
-// GetOperatorVersionFromCsv returns operator version from csv, or an empty string if no CSV for the provided operator
-// is found.
+// GetOperatorVersion returns the operator version, preferring an OLMv0 ClusterServiceVersion and falling back to an
+// OLMv1 ClusterExtension (status.install.bundle.version). This is required for operators installed via ClusterExtension
+// where no CSV exists in the operator namespace.
+func GetOperatorVersion(client *clients.Settings, operatorName, operatorNamespace string) (string, error) {
+	version, csvErr := GetOperatorVersionFromCsv(client, operatorName, operatorNamespace)
+	if csvErr == nil && version != "" {
+		return version, nil
+	}
+
+	klog.V(ranparam.LogLevel).Infof(
+		"CSV version lookup failed for operator %s in namespace %s (%v); trying ClusterExtension",
+		operatorName, operatorNamespace, csvErr)
+
+	version, ceErr := GetOperatorVersionFromClusterExtension(client, operatorName, operatorNamespace)
+	if ceErr == nil && version != "" {
+		return version, nil
+	}
+
+	if csvErr != nil && ceErr != nil {
+		return "", fmt.Errorf(
+			"could not find version for operator %s: CSV lookup: %v; ClusterExtension lookup: %w",
+			operatorName, csvErr, ceErr)
+	}
+
+	if ceErr != nil {
+		return "", ceErr
+	}
+
+	return "", csvErr
+}
+
+// GetOperatorVersionFromCsv returns operator version from a ClusterServiceVersion in operatorNamespace.
 func GetOperatorVersionFromCsv(client *clients.Settings, operatorName, operatorNamespace string) (string, error) {
 	csv, err := olm.ListClusterServiceVersion(client, operatorNamespace)
 	if err != nil {
@@ -78,6 +118,70 @@ func GetOperatorVersionFromCsv(client *clients.Settings, operatorName, operatorN
 	}
 
 	return "", fmt.Errorf("could not find version for operator %s in namespace %s", operatorName, operatorNamespace)
+}
+
+// GetOperatorVersionFromClusterExtension returns operator version from an OLMv1 ClusterExtension whose name, package,
+// or installed bundle matches operatorName. When operatorNamespace is non-empty, ClusterExtensions installed into a
+// different namespace are skipped.
+func GetOperatorVersionFromClusterExtension(
+	client *clients.Settings, operatorName, operatorNamespace string) (string, error) {
+	if client == nil || client.Interface == nil {
+		return "", fmt.Errorf("nil client while looking up ClusterExtension for operator %s", operatorName)
+	}
+
+	obj, err := client.Resource(clusterExtensionGVR).Get(context.TODO(), operatorName, metav1.GetOptions{})
+	if err == nil {
+		if version, ok := clusterExtensionBundleVersion(obj, operatorName, operatorNamespace); ok {
+			return version, nil
+		}
+	}
+
+	list, err := client.Resource(clusterExtensionGVR).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to list ClusterExtensions for operator %s: %w", operatorName, err)
+	}
+
+	for i := range list.Items {
+		if version, ok := clusterExtensionBundleVersion(&list.Items[i], operatorName, operatorNamespace); ok {
+			return version, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find ClusterExtension version for operator %s", operatorName)
+}
+
+// clusterExtensionBundleVersion returns status.install.bundle.version when the ClusterExtension matches operatorName
+// (and optional install namespace).
+func clusterExtensionBundleVersion(
+	obj *unstructured.Unstructured, operatorName, operatorNamespace string) (string, bool) {
+	if obj == nil {
+		return "", false
+	}
+
+	name := obj.GetName()
+	packageName, _, _ := unstructured.NestedString(obj.Object, "spec", "source", "catalog", "packageName")
+	installNamespace, _, _ := unstructured.NestedString(obj.Object, "spec", "namespace")
+	bundleName, _, _ := unstructured.NestedString(obj.Object, "status", "install", "bundle", "name")
+	version, _, _ := unstructured.NestedString(obj.Object, "status", "install", "bundle", "version")
+
+	if version == "" {
+		return "", false
+	}
+
+	matches := name == operatorName ||
+		strings.Contains(name, operatorName) ||
+		packageName == operatorName ||
+		strings.Contains(packageName, operatorName) ||
+		strings.Contains(bundleName, operatorName)
+	if !matches {
+		return "", false
+	}
+
+	if operatorNamespace != "" && installNamespace != "" && installNamespace != operatorNamespace {
+		return "", false
+	}
+
+	return version, true
 }
 
 // GetZTPVersionFromArgoCd is used to fetch the version of the ztp-site-generate init container.

@@ -270,7 +270,8 @@ func (ranconfig *RANConfig) newSpoke1Config(configFile string) {
 
 	ranconfig.Spoke1Config.Spoke1OperatorVersions = make(map[ranparam.SpokeOperatorName]string)
 
-	ranconfig.Spoke1Config.Spoke1OperatorVersions[ranparam.PTP], err = version.GetOperatorVersionFromCsv(
+	// Prefer CSV (OLMv0); fall back to ClusterExtension (OLMv1) when no CSV is present.
+	ranconfig.Spoke1Config.Spoke1OperatorVersions[ranparam.PTP], err = version.GetOperatorVersion(
 		ranconfig.Spoke1Config.Spoke1APIClient, string(ranparam.PTP), ranparam.PtpOperatorNamespace)
 	if err != nil {
 		klog.V(ranparam.LogLevel).Infof("Failed to get PTP version from spoke 1: %v", err)
