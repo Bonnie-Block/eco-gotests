@@ -6,6 +6,7 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/configmap"
@@ -30,6 +31,24 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 	)
 
 	BeforeEach(func() {
+		By("skipping if no Grandmaster configuration is present")
+
+		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+
+		hasGMNode := false
+		for _, nodeInfo := range nodeInfoMap {
+			if nodeInfo.Counts[profiles.ProfileTypeGM] > 0 ||
+				nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] > 0 {
+				hasGMNode = true
+
+				break
+			}
+		}
+		if !hasGMNode {
+			Skip("Test requires Grandmaster configuration")
+		}
+
 		By("creating a Prometheus API client")
 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
@@ -42,8 +61,8 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 	})
 
 	AfterEach(func() {
-		if !testRanAtLeastOnce {
-			Skip("Test did not run at least once. Skipping cleanup.")
+		if CurrentSpecReport().State == types.SpecStateSkipped || !testRanAtLeastOnce {
+			return
 		}
 
 		By("restoring the original leap configmap")
@@ -124,8 +143,6 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 				Expect(newLastAnnouncement).NotTo(Equal(originalLastAnnouncement), "Last announcement should be different")
 			}
 
-			if !testRanAtLeastOnce {
-				Skip("Could not find any node to run the test on")
-			}
+			Expect(testRanAtLeastOnce).To(BeTrue(), "Expected at least one Grandmaster node to run the test on")
 		})
 })
