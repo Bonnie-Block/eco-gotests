@@ -45,10 +45,7 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 
 		By("ensuring phc2sys is running on PTP nodes before testing")
 
@@ -95,10 +92,7 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 			}
 		}
 
-		By("ensuring clocks are locked after testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	// 59862 - validate phc2sys process restart after killing that process

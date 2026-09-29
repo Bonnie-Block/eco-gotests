@@ -73,10 +73,7 @@ var _ = Describe("PTP Log Reduction", Label(tsparams.LabelLogReduction), func() 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 
 		By("saving PtpConfigs before testing")
 
@@ -106,10 +103,7 @@ var _ = Describe("PTP Log Reduction", Label(tsparams.LabelLogReduction), func() 
 			}
 		}
 
-		By("ensuring clocks are locked after testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	// 83456 - Validates the thresholds summary is seen in the linuxptp-daemon logs after changing the ptpSetting

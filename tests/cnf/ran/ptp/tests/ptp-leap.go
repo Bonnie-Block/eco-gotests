@@ -36,8 +36,8 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
 		// Unlike most PTP tests, which check profile eligibility inside each It block, this test
-		// checks in BeforeEach to avoid a misleading EnsureClocksAreLocked timeout on configs that
-		// have no GM profiles (e.g. BC-only). See CNF-26740.
+		// checks in BeforeEach to avoid a misleading lock timeout on configs that have no GM
+		// profiles (e.g. BC-only). See CNF-26740.
 		By("skipping if no GM or Multi-NIC GM profiles are configured")
 
 		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
@@ -58,10 +58,7 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 			Skip("No GM or Multi-NIC GM profiles found — leap test not applicable")
 		}
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
 
 	AfterEach(func() {

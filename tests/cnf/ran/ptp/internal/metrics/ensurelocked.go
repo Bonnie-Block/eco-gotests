@@ -8,26 +8,43 @@ import (
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
 
-// EnsureClocksAreLocked ensures that all PTP clocks are locked across all nodes covered by the Prometheus API client.
-// It is designed to be used as a BeforeEach/AfterEach check to ensure the cluster is in a stable state.
-//
-// It ensures that clocks are locked for 10 seconds with a timeout of 5 minutes. Chronyd is excluded because this check
-// establishes the healthy baseline where GNSS/PTP is the sync source. On versions before 4.20, chronyd remains FREERUN
-// in that baseline; on 4.20+ it is stopped outside of NTP fallback. Chronyd becoming LOCKED indicates NTP fallback,
-// which is tested separately, not the steady state this function validates.
-func EnsureClocksAreLocked(prometheusAPI prometheusv1.API) error {
+// defaultClockLockStableDuration and defaultClockLockTimeout are used by EnsureClocksAreLocked. Chronyd is excluded
+// because this check establishes the healthy baseline where GNSS/PTP is the sync source. On versions before 4.20,
+// chronyd remains FREERUN in that baseline; on 4.20+ it is stopped outside of NTP fallback. Chronyd becoming LOCKED
+// indicates NTP fallback, which is tested separately, not the steady state EnsureClocksAreLocked validates.
+const (
+	defaultClockLockStableDuration = 10 * time.Second
+	defaultClockLockTimeout        = 5 * time.Minute
+	// beforeSpecClockLockTimeout bounds the initial lock check in spec setup so a degraded cluster does not
+	// spend five minutes per spec waiting on the same FREERUN state (CNF-26726).
+	beforeSpecClockLockTimeout = 30 * time.Second
+)
+
+func ensureClocksAreLocked(prometheusAPI prometheusv1.API, timeout time.Duration) error {
 	query := ClockStateQuery{
 		Process: DoesNotEqual(ProcessChronyd),
 	}
 
 	err := AssertQuery(context.TODO(), prometheusAPI, query, ClockStateLocked,
-		AssertWithStableDuration(10*time.Second),
-		AssertWithTimeout(5*time.Minute))
+		AssertWithStableDuration(defaultClockLockStableDuration),
+		AssertWithTimeout(timeout))
 	if err != nil {
 		return fmt.Errorf("failed to ensure clocks are locked: %w", err)
 	}
 
 	return nil
+}
+
+// EnsureClocksAreLocked ensures that all PTP clocks are locked across all nodes covered by the Prometheus API client.
+// It waits for clocks to remain locked for defaultClockLockStableDuration, up to defaultClockLockTimeout.
+func EnsureClocksAreLocked(prometheusAPI prometheusv1.API) error {
+	return ensureClocksAreLocked(prometheusAPI, defaultClockLockTimeout)
+}
+
+// EnsureClocksAreLockedForSpecSetup performs a short lock check used before individual specs.
+// Callers should attempt cluster recovery and skip the spec when this returns an error.
+func EnsureClocksAreLockedForSpecSetup(prometheusAPI prometheusv1.API) error {
+	return ensureClocksAreLocked(prometheusAPI, beforeSpecClockLockTimeout)
 }
 
 // EnsureClocksAreStable ensures that all PTP clocks are locked across all nodes for a specific continuous duration.
