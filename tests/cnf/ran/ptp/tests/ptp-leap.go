@@ -35,10 +35,7 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
 
 	AfterEach(func() {

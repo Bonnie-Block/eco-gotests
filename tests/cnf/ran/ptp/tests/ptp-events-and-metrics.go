@@ -38,10 +38,7 @@ var _ = Describe("PTP Events and Metrics", Label(tsparams.LabelEventsAndMetrics)
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 
 		By("saving PtpConfigs before testing")
 
@@ -69,10 +66,7 @@ var _ = Describe("PTP Events and Metrics", Label(tsparams.LabelEventsAndMetrics)
 			}
 		}
 
-		By("ensuring clocks are locked after testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	// 82480 - Validating [LOCKED] clock state in PTP metrics

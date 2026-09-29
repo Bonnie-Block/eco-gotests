@@ -19,6 +19,7 @@ import (
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/raninittools"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/ranparam"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/consumer"
+	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/harness"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/iface"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/metrics"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/tsparams"
@@ -56,6 +57,11 @@ var _ = BeforeSuite(func() {
 
 	err = metrics.EnsureClocksAreLocked(prometheusAPI)
 	Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+
+	By("capturing suite PTP baseline for recovery between specs")
+
+	err = harness.CaptureBaseline(RANConfig.Spoke1APIClient)
+	Expect(err).ToNot(HaveOccurred(), "Failed to capture suite PTP baseline")
 
 	By("initializing the NIC naming system based on the PTP version")
 

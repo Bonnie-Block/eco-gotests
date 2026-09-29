@@ -33,17 +33,11 @@ var _ = Describe("PTP Stability", Label(tsparams.LabelStability), func() {
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
 
 	AfterEach(func() {
-		By("ensuring clocks are locked after testing")
-
-		err := metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	// 38228 - Measure the PTP Slave Clock Stability leveraging the PTP offset communicated in ptp4l logs

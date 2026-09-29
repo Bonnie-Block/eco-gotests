@@ -44,10 +44,7 @@ var _ = Describe("PTP T-GM SMA Disconnect", Label(tsparams.LabelSMADisconnect), 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		By("ensuring clocks are locked before testing")
-
-		err = metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
 
 	AfterEach(func() {
@@ -55,10 +52,7 @@ var _ = Describe("PTP T-GM SMA Disconnect", Label(tsparams.LabelSMADisconnect), 
 			return
 		}
 
-		By("ensuring clocks are locked after testing")
-
-		err := metrics.EnsureClocksAreLocked(prometheusAPI)
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	// 81205 - checks FREERUN status are generated for dpll process for RX interface and GM process for TX interface
