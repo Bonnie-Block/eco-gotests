@@ -24,20 +24,16 @@ type HoldoverExpectedClockClasses struct {
 	Freerun           metrics.PtpClockClass
 }
 
-var (
-	// HoldoverPluginSettingsNoOutOfSpec are the holdover settings without out-of-spec.
-	HoldoverPluginSettingsNoOutOfSpec = HoldoverPluginSettings{
-		LocalHoldoverTimeout:   360,
-		MaxInSpecOffset:        14401,
-		LocalMaxHoldoverOffSet: 14400,
-	}
-	// HoldoverPluginSettingsWithOutOfSpec are the holdover settings with out-of-spec.
-	HoldoverPluginSettingsWithOutOfSpec = HoldoverPluginSettings{
-		LocalHoldoverTimeout:   360,
-		MaxInSpecOffset:        1800,
-		LocalMaxHoldoverOffSet: 14400,
-	}
-)
+// HoldoverPluginSettingsNominal are holdover thresholds applied during upstream-loss holdover tests.
+// Values align with OCPBUGS-111642 QE guidance (maxInSpecOffset 40, localMaxHoldoverOffset 100,
+// localHoldoverTimeout 300) and match XR8720t maxInSpecOffset; they replace the former WPC lab
+// stress profile (360 / 14401|1800 / 14400). Tests patch these for the case duration and restore
+// cluster defaults in cleanup.
+var HoldoverPluginSettingsNominal = HoldoverPluginSettings{
+	LocalHoldoverTimeout:   300,
+	MaxInSpecOffset:        40,
+	LocalMaxHoldoverOffSet: 100,
+}
 
 // TBCClockClasses returns the standard clock class values for T-BC tests.
 func TBCClockClasses() HoldoverExpectedClockClasses {

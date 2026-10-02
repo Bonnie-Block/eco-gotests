@@ -72,7 +72,7 @@ var _ = Describe("PTP Dual T-BC", Label(tsparams.LabelDualTBC), func() {
 		// 89746 - validates dual t-bc holdover and freerun after both ports are disconnected
 		It("validates dual t-bc holdover and freerun after both ports are disconnected",
 			reportxml.ID("89746"), func() {
-				assertDualTBCHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNoOutOfSpec,
+				assertDualTBCHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNominal,
 					timeout, profiles.TBCClockClasses())
 			})
 	})
