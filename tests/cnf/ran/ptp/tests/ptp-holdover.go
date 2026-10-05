@@ -27,10 +27,9 @@ import (
 
 const holdoverTestTimeout = 7 * time.Minute
 
-// Upstream-loss holdover cases (83297–83300, 88274–88277) apply HoldoverPluginSettingsNominal during
-// each It block, then restore the deployed profile. Nominal thresholds are not WPC stress values.
-// On GNR-D, triage 83297/83299 (relock, no spurious FREERUN) separately from 83298/83300 (FREERUN legs)
-// when investigating OCPBUGS-111642.
+// Upstream-loss holdover cases patch HoldoverPluginSettingsNoOutOfSpec or WithOutOfSpec per scenario
+// (localMax vs maxInSpec ordering), then restore the deployed profile. On GNR-D, triage 83297/83299
+// (relock, no spurious FREERUN) separately from 83298/83300 when investigating OCPBUGS-111642.
 
 // TTSCClockClasses returns clock class values for T-TSC tests on 4.21+. Clock class does not change and
 // remains 255 throughout all states.
@@ -95,28 +94,28 @@ var _ = Describe("PTP Holdover", Label(tsparams.LabelTBCTSCHoldover), func() {
 		// 83297 - Verifies t-bc transition from holdover-in-spec to locked when upstream clock recovers
 		It("verifies t-bc transition from holdover-in-spec to locked when upstream clock recovers",
 			reportxml.ID("83297"), func() {
-				assertHoldoverInSpecToLocked(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToLocked(testData, profiles.HoldoverPluginSettingsNoOutOfSpec,
 					timeout, profiles.TBCClockClasses(), true)
 			})
 
 		// 83298 - Verifies t-bc transition from holdover-in-spec to freerun when localmaxholdoveroffset reached
 		It("verifies t-bc transition from holdover-in-spec to freerun when localmaxholdoveroffset reached",
 			reportxml.ID("83298"), func() {
-				assertHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNoOutOfSpec,
 					timeout, profiles.TBCClockClasses(), true)
 			})
 
 		// 83299 - Verifies t-bc transition from holdover-in-spec to holdover-out-of-spec when maxinspecoffset reached
 		It("verifies t-bc transition from holdover-in-spec to holdover-out-of-spec when maxinspecoffset reached",
 			reportxml.ID("83299"), func() {
-				assertHoldoverInSpecToOutOfSpec(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToOutOfSpec(testData, profiles.HoldoverPluginSettingsWithOutOfSpec,
 					timeout, profiles.TBCClockClasses(), true)
 			})
 
 		// 83300 - Verifies t-bc transition from holdover-out-of-spec to freerun when localmaxholdoveroffset reached
 		It("verifies t-bc transition from holdover-out-of-spec to freerun when localmaxholdoveroffset reached",
 			reportxml.ID("83300"), func() {
-				assertHoldoverOutOfSpecToFreerun(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverOutOfSpecToFreerun(testData, profiles.HoldoverPluginSettingsWithOutOfSpec,
 					timeout, profiles.TBCClockClasses(), true)
 			})
 	})
@@ -161,28 +160,28 @@ var _ = Describe("PTP Holdover", Label(tsparams.LabelTBCTSCHoldover), func() {
 		// 88274 - Verifies t-tsc transition from holdover-in-spec to locked when upstream clock recovers
 		It("verifies t-tsc transition from holdover-in-spec to locked when upstream clock recovers",
 			reportxml.ID("88274"), func() {
-				assertHoldoverInSpecToLocked(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToLocked(testData, profiles.HoldoverPluginSettingsNoOutOfSpec,
 					timeout, expectedClockClasses, clockClassChanges)
 			})
 
 		// 88275 - Verifies t-tsc transition from holdover-in-spec to freerun when localmaxholdoveroffset reached
 		It("verifies t-tsc transition from holdover-in-spec to freerun when localmaxholdoveroffset reached",
 			reportxml.ID("88275"), func() {
-				assertHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToFreerun(testData, profiles.HoldoverPluginSettingsNoOutOfSpec,
 					timeout, expectedClockClasses, clockClassChanges)
 			})
 
 		// 88276 - Verifies t-tsc transition from holdover-in-spec to holdover-out-of-spec when maxinspecoffset reached
 		It("verifies t-tsc transition from holdover-in-spec to holdover-out-of-spec when maxinspecoffset reached",
 			reportxml.ID("88276"), func() {
-				assertHoldoverInSpecToOutOfSpec(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverInSpecToOutOfSpec(testData, profiles.HoldoverPluginSettingsWithOutOfSpec,
 					timeout, expectedClockClasses, clockClassChanges)
 			})
 
 		// 88277 - Verifies t-tsc transition from holdover-out-of-spec to freerun when localmaxholdoveroffset reached
 		It("verifies t-tsc transition from holdover-out-of-spec to freerun when localmaxholdoveroffset reached",
 			reportxml.ID("88277"), func() {
-				assertHoldoverOutOfSpecToFreerun(testData, profiles.HoldoverPluginSettingsNominal,
+				assertHoldoverOutOfSpecToFreerun(testData, profiles.HoldoverPluginSettingsWithOutOfSpec,
 					timeout, expectedClockClasses, clockClassChanges)
 			})
 	})
