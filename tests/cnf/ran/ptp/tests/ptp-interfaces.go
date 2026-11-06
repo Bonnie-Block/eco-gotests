@@ -705,8 +705,6 @@ var _ = Describe("PTP Interfaces", Label(tsparams.LabelInterfaces), func() {
 			// 73095 - Validating HA failover when active profile configuration is deleted
 			It("should change high availability active profile when active profile is deleted",
 				reportxml.ID("73095"), func() {
-					testActuallyRan := false
-
 					By("getting node info map")
 
 					nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
@@ -720,8 +718,6 @@ var _ = Describe("PTP Interfaces", Label(tsparams.LabelInterfaces), func() {
 
 							continue
 						}
-
-						testActuallyRan = true
 
 						totalHAProfiles := 0
 
@@ -786,10 +782,6 @@ var _ = Describe("PTP Interfaces", Label(tsparams.LabelInterfaces), func() {
 
 						// Test only on first HA node found
 						break
-					}
-
-					if !testActuallyRan {
-						Skip("Could not find any HA configuration to test")
 					}
 				})
 		})

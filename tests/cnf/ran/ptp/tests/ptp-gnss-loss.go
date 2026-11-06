@@ -102,8 +102,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 	// 78463 - verifies t-gm transition from holdover to locked due to gnss recovery
 	It("verifies t-gm transition from holdover to locked due to gnss recovery",
 		reportxml.ID("78463"), func() {
-			testActuallyRan := false
-
 			By("getting node info map")
 
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
@@ -115,7 +113,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 					continue
 				}
 
-				testActuallyRan = true
 				gmProfileInfo := gmProfilesInfo[0]
 
 				gmProfile, err := gmProfileInfo.PullProfile(RANConfig.Spoke1APIClient)
@@ -241,17 +238,12 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 					"Expected no FREERUN event on node %s, but one was received", nodeName)
 			}
 
-			if !testActuallyRan {
-				Skip("Test requires Grandmaster configuration")
-			}
 		})
 
 	// 78464 - verifies t-gm transition from holdover to freerun due to timeout
 	It("verifies t-gm transition from holdover to freerun due to timeout",
 		reportxml.ID("78464"), func() {
 			const holdoverTimeoutSeconds = 3
-
-			testActuallyRan := false
 
 			By("getting node info map")
 
@@ -264,7 +256,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 					continue
 				}
 
-				testActuallyRan = true
 				gmProfileInfo := gmProfilesInfo[0]
 
 				By("getting the ublox protocol version for node " + nodeName)
@@ -420,9 +411,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 				assertClockClass6InMetrics(prometheusAPI, nodeName, configSupported)
 			}
 
-			if !testActuallyRan {
-				Skip("Test requires Grandmaster configuration")
-			}
 		})
 
 	// 78465 - verifies t-gm transition from holdover to freerun due to offset
@@ -435,8 +423,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 				timeToReachMaxInSpec   = (maxInSpecOffset / (localMaxHoldoverOffset / holdoverTimeoutSeconds)) * time.Second
 			)
 
-			testActuallyRan := false
-
 			By("getting node info map")
 
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
@@ -448,7 +434,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 					continue
 				}
 
-				testActuallyRan = true
 				gmProfileInfo := gmProfilesInfo[0]
 
 				By("getting the ublox protocol version for node " + nodeName)
@@ -605,9 +590,6 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 				assertClockClass6InMetrics(prometheusAPI, nodeName, configSupported)
 			}
 
-			if !testActuallyRan {
-				Skip("Test requires Grandmaster configuration")
-			}
 		})
 })
 

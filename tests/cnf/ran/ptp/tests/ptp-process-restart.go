@@ -280,8 +280,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 		// 49737 - Ptp4l restart - single process
 		It("verifies recovery after killing a ptp4l process related to phc2sys", reportxml.ID("49737"), func() {
-			testRanAtLeastOnce := false
-
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
 			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
@@ -291,8 +289,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 					continue
 				}
-
-				testRanAtLeastOnce = true
 
 				By("updating the holdover timeout for all profiles on the node")
 
@@ -422,10 +418,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 				err = profiles.WaitForOldHoldOverTimeouts(prometheusAPI, nodeInfo.Name, oldHoldovers, 5*time.Minute)
 				Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be reset to original values")
 			}
-
-			if !testRanAtLeastOnce {
-				Skip("No nodes without HA configuration to run the test on")
-			}
 		})
 	})
 
@@ -437,8 +429,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 		It("validates ts2phc process recover after a ts2phc process restart",
 			reportxml.ID("59863"), func() {
-				testRanAtLeastOnce := false
-
 				nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
 				Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
@@ -448,8 +438,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 						nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
 						continue
 					}
-
-					testRanAtLeastOnce = true
 
 					By("getting the ts2phc PID")
 
@@ -566,10 +554,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 					)
 					Expect(err).ToNot(HaveOccurred(), "Failed to assert clock class 6 state on node %s", nodeInfo.Name)
 				}
-
-				if !testRanAtLeastOnce {
-					Skip("No GM nodes found")
-				}
 			})
 	})
 
@@ -582,8 +566,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 		// 84297 - should verify events are logged during sidecar recovery
 		It("should verify events are logged during sidecar recovery", reportxml.ID("84297"), func() {
-			testRanAtLeastOnce := false
-
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
 			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
@@ -594,8 +576,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 					continue
 				}
-
-				testRanAtLeastOnce = true
 
 				gmProfiles := nodeInfo.GetProfilesByTypes(profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
 				Expect(gmProfiles).ToNot(BeEmpty(), "No GM profile found for node %s", nodeInfo.Name)
@@ -679,10 +659,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 				)
 				Expect(err).ToNot(HaveOccurred(), "Failed to wait for clock class 6 event on node %s", nodeInfo.Name)
 			}
-
-			if !testRanAtLeastOnce {
-				Skip("Test requires Grandmaster configuration")
-			}
 		})
 	})
 
@@ -693,7 +669,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 		})
 
 		It("Validates T-GM config ptp4l process recover after restart that process", reportxml.ID("59864"), func() {
-			testRanAtLeastOnce := false
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
 			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
@@ -703,8 +678,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 					nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
 					continue
 				}
-
-				testRanAtLeastOnce = true
 
 				By("getting the ptp4l PIDs by related to T-GM config")
 
@@ -735,15 +708,9 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 				Expect(len(newPtp4lPIDs)).To(Equal(1), "Expected 1 ptp4l PID related to ts2phc for node %s", nodeInfo.Name)
 				Expect(newPtp4lPIDs).NotTo(Equal(oldPtp4lPIDs), "ptp4l PID did not change: "+oldPtp4lPIDs[0])
 			}
-
-			if !testRanAtLeastOnce {
-				Skip("No GM nodes found")
-			}
 		})
 
 		It("Validates gpsd process recovery after restart that process", reportxml.ID("64777"), func() {
-			testRanAtLeastOnce := false
-
 			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
 			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
@@ -753,8 +720,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 					nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
 					continue
 				}
-
-				testRanAtLeastOnce = true
 
 				By("getting the gpsd PID")
 
@@ -854,10 +819,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 					metrics.AssertWithStartTime(startTime),
 				)
 				Expect(err).ToNot(HaveOccurred(), "Failed to assert clock class 6 state on node %s", nodeInfo.Name)
-			}
-
-			if !testRanAtLeastOnce {
-				Skip("No GM nodes found")
 			}
 		})
 	})
