@@ -42,12 +42,14 @@ var _ = Describe("PTP Interfaces", Label(tsparams.LabelInterfaces), func() {
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
-		ensureClocksLockedBeforeSpec(prometheusAPI)
-
 		By("saving PtpConfigs before testing")
 
 		savedPtpConfigs, err = profiles.SavePtpConfigs(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to save PtpConfigs")
+	})
+
+	JustBeforeEach(func() {
+		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
 
 	AfterEach(func() {
@@ -339,451 +341,458 @@ var _ = Describe("PTP Interfaces", Label(tsparams.LabelInterfaces), func() {
 		}
 	})
 
-	// 73093 - Validating HA failover when active interface goes down
-	It("should change high availability active profile when other nic interface is down", reportxml.ID("73093"), func() {
-		testActuallyRan := false
+	Context("HA configuration", func() {
+		BeforeEach(func() {
+			skipIfNoNodeHasProfileTypes(
+				"Could not find any HA configuration to test", profiles.ProfileTypeHA)
+		})
 
-		By("getting node info map")
+		// 73093 - Validating HA failover when active interface goes down
+		It("should change high availability active profile when other nic interface is down", reportxml.ID("73093"), func() {
+			testActuallyRan := false
 
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+			By("getting node info map")
 
-		for nodeName, nodeInfo := range nodeInfoMap {
-			By("checking if node has HA configuration")
+			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
-			if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
-				klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
+			for nodeName, nodeInfo := range nodeInfoMap {
+				By("checking if node has HA configuration")
 
-				continue
-			}
+				if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
+					klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
 
-			By("getting the active and inactive HA profiles")
-
-			activeProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName,
-				metrics.HAProfileStatusActive)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
-			Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
-
-			inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName,
-				metrics.HAProfileStatusInactive)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
-			Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
-
-			activeProfile := activeProfiles[0]
-
-			// Client interfaces are the interfaces that are used to synchronize the clock.
-			By("getting active profile client interface")
-
-			activeProfileClientInterface := getHAProfileClientInterface(nodeInfo, activeProfile)
-
-			inactiveProfileClientInterfaces := make([]iface.Iface, 0, 1)
-
-			for _, inactiveProfile := range inactiveProfiles {
-				inactiveProfileClientInterface := getHAProfileClientInterface(nodeInfo, inactiveProfile)
-				inactiveProfileClientInterfaces = append(inactiveProfileClientInterfaces, inactiveProfileClientInterface)
-			}
-
-			By("checking if active profile client interface is the egress interface")
-
-			egressInterface, err := iface.GetEgressInterfaceName(RANConfig.Spoke1APIClient, nodeName)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get egress interface")
-
-			if activeProfileClientInterface == egressInterface {
-				klog.V(tsparams.LogLevel).Infof("Skipping test for egress interface %s", activeProfileClientInterface.GetAlias())
-
-				continue
-			}
-
-			testActuallyRan = true
-			startTime := time.Now()
-
-			By(fmt.Sprintf("bringing down the active HA's interface %s", activeProfileClientInterface))
-
-			DeferCleanup(func() {
-				By("restoring original active HA's interface")
-
-				err := iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
-					nodeName, activeProfileClientInterface, iface.InterfaceStateUp)
-				Expect(err).ToNot(HaveOccurred(), "Failed to restore original active HA's interface")
-			})
-
-			err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
-				nodeName, activeProfileClientInterface, iface.InterfaceStateDown)
-			Expect(err).ToNot(HaveOccurred(), "Failed to set the active HA's interface down")
-
-			By("validating the active HA profile changed")
-
-			newActiveProfile := waitForActiveHAProfileChange(prometheusAPI, nodeName, activeProfile, 2*time.Minute)
-			Expect(newActiveProfile).NotTo(Equal(activeProfile), "Active profile should have changed: %s", newActiveProfile)
-
-			By("validating the original active interface is in FREERUN state")
-
-			activeNIC := activeProfileClientInterface.GetAlias()
-			clockStateQuery := metrics.ClockStateQuery{
-				Interface: metrics.Equals(activeNIC),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateFreerun,
-				metrics.AssertWithTimeout(5*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert original active interface is in FREERUN")
-
-			By("validating that all inactive HA profile client interfaces are in LOCKED state")
-
-			inactiveProfileClientIfacesAliases := make([]iface.Alias, 0, len(inactiveProfileClientInterfaces))
-			for _, inactiveProfileClientInterface := range inactiveProfileClientInterfaces {
-				inactiveProfileClientIfacesAliases = append(
-					inactiveProfileClientIfacesAliases, inactiveProfileClientInterface.GetAlias())
-			}
-
-			inactiveIfacesClockStateQuery := metrics.ClockStateQuery{
-				Interface: metrics.Includes(inactiveProfileClientIfacesAliases...),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, inactiveIfacesClockStateQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(5*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert all inactive interfaces are in LOCKED state")
-
-			By("validating no HOLDOVER event for original inactive interfaces")
-
-			eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeName)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get event pod")
-
-			for _, inactiveProfileClientInterface := range inactiveProfileClientInterfaces {
-				inactiveProfileClientNIC := inactiveProfileClientInterface.GetAlias()
-				holdoverFilter := events.All(
-					events.IsType(eventptp.PtpStateChange),
-					events.HasValue(events.WithSyncState(eventptp.HOLDOVER), events.OnInterface(inactiveProfileClientNIC)),
-				)
-				err = events.WaitForEvent(eventPod, startTime, 10*time.Second, holdoverFilter)
-				Expect(err).To(HaveOccurred(), "Unexpected HOLDOVER event on original inactive interface %s",
-					inactiveProfileClientNIC)
-			}
-
-			By("validating CLOCK_REALTIME is in LOCKED state")
-
-			clockRealtimeQuery := metrics.ClockStateQuery{
-				Interface: metrics.Equals(iface.ClockRealtime),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(5*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
-
-			By("restoring original active HA's interface")
-
-			err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
-				nodeName, activeProfileClientInterface, iface.InterfaceStateUp)
-			Expect(err).ToNot(HaveOccurred(), "Failed to restore original active HA's interface")
-
-			By("validating restored active profile client interface returns to LOCKED state")
-
-			activeNIC = activeProfileClientInterface.GetAlias()
-			clockStateQuery = metrics.ClockStateQuery{
-				Interface: metrics.Equals(activeNIC),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(3*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert restored active profile client interface is LOCKED")
-
-			initialTotalProfiles := len(activeProfiles) + len(inactiveProfiles)
-
-			By("validating HA system returns to healthy state")
-			waitForHAHealthy(prometheusAPI, nodeName, initialTotalProfiles, 2*time.Minute)
-
-			By("validating CLOCK_REALTIME remains LOCKED")
-
-			clockRealtimeQuery = metrics.ClockStateQuery{
-				Interface: metrics.Equals(iface.ClockRealtime),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(1*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
-
-			break
-		}
-
-		if !testActuallyRan {
-			Skip("Could not find any HA configuration to test")
-		}
-	})
-
-	// 73094 - Validating complete HA failure when both active and inactive interfaces go down
-	It("should move to FREERUN state when active and inactive interfaces are down", reportxml.ID("73094"), func() {
-		testActuallyRan := false
-
-		By("getting node info map")
-
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
-
-		for nodeName, nodeInfo := range nodeInfoMap {
-			By("checking if node has HA configuration")
-
-			if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
-				klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
-
-				continue
-			}
-
-			By("getting the active and inactive HA profiles")
-
-			activeProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName, metrics.HAProfileStatusActive)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
-			Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
-
-			activeProfileInfo := nodeInfo.GetProfileByDaemonName(activeProfiles[0])
-			Expect(activeProfileInfo).ToNot(BeNil(), "Failed to find active profile in node info")
-
-			activeClientInterfaces := activeProfileInfo.GetInterfacesByClockType(profiles.ClockTypeClient)
-			Expect(len(activeClientInterfaces)).To(Equal(1), "Expected exactly one client interface for HA profile")
-
-			inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(),
-				prometheusAPI, nodeName, metrics.HAProfileStatusInactive)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
-			Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
-
-			haInterfaces := make([]iface.Iface, 0, len(activeProfiles)+len(inactiveProfiles))
-			haInterfaces = append(haInterfaces, activeClientInterfaces[0].Iface)
-
-			for _, inactiveProfile := range inactiveProfiles {
-				inactiveProfileInfo := nodeInfo.GetProfileByDaemonName(inactiveProfile)
-				Expect(inactiveProfileInfo).ToNot(BeNil(), "Failed to find inactive profile in node info")
-
-				inactiveClientInterfaces := inactiveProfileInfo.GetInterfacesByClockType(profiles.ClockTypeClient)
-				Expect(len(inactiveClientInterfaces)).To(Equal(1), "Expected exactly one client interface for HA profile")
-				haInterfaces = append(haInterfaces, inactiveClientInterfaces[0].Iface)
-			}
-
-			By("checking if any interface is the egress interface")
-
-			egressInterface, err := iface.GetEgressInterfaceName(RANConfig.Spoke1APIClient, nodeName)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get egress interface")
-
-			if slices.Contains(haInterfaces, egressInterface) {
-				klog.V(tsparams.LogLevel).Infof("Skipping test - HA interface is egress interface")
-
-				continue
-			}
-
-			testActuallyRan = true
-
-			By("bringing down all HA interfaces")
-			DeferCleanup(func() {
-				By("restoring all HA interfaces")
-
-				for _, haInterface := range haInterfaces {
-					err := iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateUp)
-					Expect(err).ToNot(HaveOccurred(), "Failed to restore HA interface %s", haInterface)
+					continue
 				}
-			})
 
-			for _, haInterface := range haInterfaces {
-				err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateDown)
-				Expect(err).ToNot(HaveOccurred(), "Failed to set HA interface %s down", haInterface)
-			}
+				By("getting the active and inactive HA profiles")
 
-			startTime := time.Now()
+				activeProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName,
+					metrics.HAProfileStatusActive)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
+				Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
 
-			By("validating all HA Clock States are in FREERUN state")
+				inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName,
+					metrics.HAProfileStatusInactive)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
+				Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
 
-			haIfaceAliases := make([]iface.Alias, 0, len(haInterfaces))
-			for _, haInterface := range haInterfaces {
-				haIfaceAliases = append(haIfaceAliases, haInterface.GetAlias())
-			}
+				activeProfile := activeProfiles[0]
 
-			haIfacesClockStateQuery := metrics.ClockStateQuery{
-				Interface: metrics.Includes(haIfaceAliases...),
-				Node:      metrics.Equals(nodeName),
-			}
+				// Client interfaces are the interfaces that are used to synchronize the clock.
+				By("getting active profile client interface")
 
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, haIfacesClockStateQuery, metrics.ClockStateFreerun,
-				metrics.AssertWithTimeout(1*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert all HA interfaces are in FREERUN state")
+				activeProfileClientInterface := getHAProfileClientInterface(nodeInfo, activeProfile)
 
-			By("validating CLOCK_REALTIME is in FREERUN state")
+				inactiveProfileClientInterfaces := make([]iface.Iface, 0, 1)
 
-			clockRealtimeQuery := metrics.ClockStateQuery{
-				Interface: metrics.Equals(iface.ClockRealtime),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateFreerun,
-				metrics.AssertWithTimeout(1*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is in FREERUN")
+				for _, inactiveProfile := range inactiveProfiles {
+					inactiveProfileClientInterface := getHAProfileClientInterface(nodeInfo, inactiveProfile)
+					inactiveProfileClientInterfaces = append(inactiveProfileClientInterfaces, inactiveProfileClientInterface)
+				}
 
-			// for 4.18 versions and above, the clock class is 248
-			versionStr := RANConfig.Spoke1OperatorVersions[ranparam.PTP]
-			Expect(versionStr).ToNot(BeEmpty(), "PTP operator version is missing")
-			versionInRange, verErr := version.IsVersionStringInRange(versionStr, "4.18.0-0", "")
-			Expect(verErr).ToNot(HaveOccurred(), "Failed to parse PTP operator version")
+				By("checking if active profile client interface is the egress interface")
 
-			if versionInRange {
-				By("getting the event pod for the node")
+				egressInterface, err := iface.GetEgressInterfaceName(RANConfig.Spoke1APIClient, nodeName)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get egress interface")
+
+				if activeProfileClientInterface == egressInterface {
+					klog.V(tsparams.LogLevel).Infof("Skipping test for egress interface %s", activeProfileClientInterface.GetAlias())
+
+					continue
+				}
+
+				testActuallyRan = true
+				startTime := time.Now()
+
+				By(fmt.Sprintf("bringing down the active HA's interface %s", activeProfileClientInterface))
+
+				DeferCleanup(func() {
+					By("restoring original active HA's interface")
+
+					err := iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
+						nodeName, activeProfileClientInterface, iface.InterfaceStateUp)
+					Expect(err).ToNot(HaveOccurred(), "Failed to restore original active HA's interface")
+				})
+
+				err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
+					nodeName, activeProfileClientInterface, iface.InterfaceStateDown)
+				Expect(err).ToNot(HaveOccurred(), "Failed to set the active HA's interface down")
+
+				By("validating the active HA profile changed")
+
+				newActiveProfile := waitForActiveHAProfileChange(prometheusAPI, nodeName, activeProfile, 2*time.Minute)
+				Expect(newActiveProfile).NotTo(Equal(activeProfile), "Active profile should have changed: %s", newActiveProfile)
+
+				By("validating the original active interface is in FREERUN state")
+
+				activeNIC := activeProfileClientInterface.GetAlias()
+				clockStateQuery := metrics.ClockStateQuery{
+					Interface: metrics.Equals(activeNIC),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateFreerun,
+					metrics.AssertWithTimeout(5*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert original active interface is in FREERUN")
+
+				By("validating that all inactive HA profile client interfaces are in LOCKED state")
+
+				inactiveProfileClientIfacesAliases := make([]iface.Alias, 0, len(inactiveProfileClientInterfaces))
+				for _, inactiveProfileClientInterface := range inactiveProfileClientInterfaces {
+					inactiveProfileClientIfacesAliases = append(
+						inactiveProfileClientIfacesAliases, inactiveProfileClientInterface.GetAlias())
+				}
+
+				inactiveIfacesClockStateQuery := metrics.ClockStateQuery{
+					Interface: metrics.Includes(inactiveProfileClientIfacesAliases...),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, inactiveIfacesClockStateQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(5*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert all inactive interfaces are in LOCKED state")
+
+				By("validating no HOLDOVER event for original inactive interfaces")
 
 				eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeName)
-				Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeName)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get event pod")
 
-				By("validating clock class is 248 for HA interfaces")
+				for _, inactiveProfileClientInterface := range inactiveProfileClientInterfaces {
+					inactiveProfileClientNIC := inactiveProfileClientInterface.GetAlias()
+					holdoverFilter := events.All(
+						events.IsType(eventptp.PtpStateChange),
+						events.HasValue(events.WithSyncState(eventptp.HOLDOVER), events.OnInterface(inactiveProfileClientNIC)),
+					)
+					err = events.WaitForEvent(eventPod, startTime, 10*time.Second, holdoverFilter)
+					Expect(err).To(HaveOccurred(), "Unexpected HOLDOVER event on original inactive interface %s",
+						inactiveProfileClientNIC)
+				}
+
+				By("validating CLOCK_REALTIME is in LOCKED state")
+
+				clockRealtimeQuery := metrics.ClockStateQuery{
+					Interface: metrics.Equals(iface.ClockRealtime),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(5*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
+
+				By("restoring original active HA's interface")
+
+				err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient,
+					nodeName, activeProfileClientInterface, iface.InterfaceStateUp)
+				Expect(err).ToNot(HaveOccurred(), "Failed to restore original active HA's interface")
+
+				By("validating restored active profile client interface returns to LOCKED state")
+
+				activeNIC = activeProfileClientInterface.GetAlias()
+				clockStateQuery = metrics.ClockStateQuery{
+					Interface: metrics.Equals(activeNIC),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(3*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert restored active profile client interface is LOCKED")
+
+				initialTotalProfiles := len(activeProfiles) + len(inactiveProfiles)
+
+				By("validating HA system returns to healthy state")
+				waitForHAHealthy(prometheusAPI, nodeName, initialTotalProfiles, 2*time.Minute)
+
+				By("validating CLOCK_REALTIME remains LOCKED")
+
+				clockRealtimeQuery = metrics.ClockStateQuery{
+					Interface: metrics.Equals(iface.ClockRealtime),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(1*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
+
+				break
+			}
+
+			if !testActuallyRan {
+				Skip("Could not find any HA configuration to test")
+			}
+		})
+
+		// 73094 - Validating complete HA failure when both active and inactive interfaces go down
+		It("should move to FREERUN state when active and inactive interfaces are down", reportxml.ID("73094"), func() {
+			testActuallyRan := false
+
+			By("getting node info map")
+
+			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+
+			for nodeName, nodeInfo := range nodeInfoMap {
+				By("checking if node has HA configuration")
+
+				if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
+					klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
+
+					continue
+				}
+
+				By("getting the active and inactive HA profiles")
+
+				activeProfiles, err := profiles.GetHAProfiles(context.TODO(), prometheusAPI, nodeName, metrics.HAProfileStatusActive)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
+				Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
+
+				activeProfileInfo := nodeInfo.GetProfileByDaemonName(activeProfiles[0])
+				Expect(activeProfileInfo).ToNot(BeNil(), "Failed to find active profile in node info")
+
+				activeClientInterfaces := activeProfileInfo.GetInterfacesByClockType(profiles.ClockTypeClient)
+				Expect(len(activeClientInterfaces)).To(Equal(1), "Expected exactly one client interface for HA profile")
+
+				inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(),
+					prometheusAPI, nodeName, metrics.HAProfileStatusInactive)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
+				Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
+
+				haInterfaces := make([]iface.Iface, 0, len(activeProfiles)+len(inactiveProfiles))
+				haInterfaces = append(haInterfaces, activeClientInterfaces[0].Iface)
+
+				for _, inactiveProfile := range inactiveProfiles {
+					inactiveProfileInfo := nodeInfo.GetProfileByDaemonName(inactiveProfile)
+					Expect(inactiveProfileInfo).ToNot(BeNil(), "Failed to find inactive profile in node info")
+
+					inactiveClientInterfaces := inactiveProfileInfo.GetInterfacesByClockType(profiles.ClockTypeClient)
+					Expect(len(inactiveClientInterfaces)).To(Equal(1), "Expected exactly one client interface for HA profile")
+					haInterfaces = append(haInterfaces, inactiveClientInterfaces[0].Iface)
+				}
+
+				By("checking if any interface is the egress interface")
+
+				egressInterface, err := iface.GetEgressInterfaceName(RANConfig.Spoke1APIClient, nodeName)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get egress interface")
+
+				if slices.Contains(haInterfaces, egressInterface) {
+					klog.V(tsparams.LogLevel).Infof("Skipping test - HA interface is egress interface")
+
+					continue
+				}
+
+				testActuallyRan = true
+
+				By("bringing down all HA interfaces")
+				DeferCleanup(func() {
+					By("restoring all HA interfaces")
+
+					for _, haInterface := range haInterfaces {
+						err := iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateUp)
+						Expect(err).ToNot(HaveOccurred(), "Failed to restore HA interface %s", haInterface)
+					}
+				})
 
 				for _, haInterface := range haInterfaces {
-					By(fmt.Sprintf("validating clock class is 248 for interface %s", haInterface.GetAlias()))
-					clockClassEventFilter := events.All(
-						events.IsType(eventptp.PtpClockClassChange),
-						events.HasValue(
-							events.WithMetric(248),
-							events.ContainingResource(string(haInterface.GetAlias())),
-						),
-					)
-					err = events.WaitForEvent(eventPod, startTime, 1*time.Minute, clockClassEventFilter)
-					Expect(err).ToNot(HaveOccurred(), "Failed to wait for clock class event for interface %s", haInterface.GetAlias())
+					err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateDown)
+					Expect(err).ToNot(HaveOccurred(), "Failed to set HA interface %s down", haInterface)
 				}
+
+				startTime := time.Now()
+
+				By("validating all HA Clock States are in FREERUN state")
+
+				haIfaceAliases := make([]iface.Alias, 0, len(haInterfaces))
+				for _, haInterface := range haInterfaces {
+					haIfaceAliases = append(haIfaceAliases, haInterface.GetAlias())
+				}
+
+				haIfacesClockStateQuery := metrics.ClockStateQuery{
+					Interface: metrics.Includes(haIfaceAliases...),
+					Node:      metrics.Equals(nodeName),
+				}
+
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, haIfacesClockStateQuery, metrics.ClockStateFreerun,
+					metrics.AssertWithTimeout(1*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert all HA interfaces are in FREERUN state")
+
+				By("validating CLOCK_REALTIME is in FREERUN state")
+
+				clockRealtimeQuery := metrics.ClockStateQuery{
+					Interface: metrics.Equals(iface.ClockRealtime),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateFreerun,
+					metrics.AssertWithTimeout(1*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is in FREERUN")
+
+				// for 4.18 versions and above, the clock class is 248
+				versionStr := RANConfig.Spoke1OperatorVersions[ranparam.PTP]
+				Expect(versionStr).ToNot(BeEmpty(), "PTP operator version is missing")
+				versionInRange, verErr := version.IsVersionStringInRange(versionStr, "4.18.0-0", "")
+				Expect(verErr).ToNot(HaveOccurred(), "Failed to parse PTP operator version")
+
+				if versionInRange {
+					By("getting the event pod for the node")
+
+					eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeName)
+					Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeName)
+
+					By("validating clock class is 248 for HA interfaces")
+
+					for _, haInterface := range haInterfaces {
+						By(fmt.Sprintf("validating clock class is 248 for interface %s", haInterface.GetAlias()))
+						clockClassEventFilter := events.All(
+							events.IsType(eventptp.PtpClockClassChange),
+							events.HasValue(
+								events.WithMetric(248),
+								events.ContainingResource(string(haInterface.GetAlias())),
+							),
+						)
+						err = events.WaitForEvent(eventPod, startTime, 1*time.Minute, clockClassEventFilter)
+						Expect(err).ToNot(HaveOccurred(), "Failed to wait for clock class event for interface %s", haInterface.GetAlias())
+					}
+				}
+
+				By("restoring HA interfaces")
+
+				for _, haInterface := range haInterfaces {
+					err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateUp)
+					Expect(err).ToNot(HaveOccurred(), "Failed to restore HA interface %s", haInterface)
+				}
+
+				By("validating all Clock State metrics return to LOCKED state")
+
+				haIfaceAliases = make([]iface.Alias, 0, len(haInterfaces))
+				for _, haInterface := range haInterfaces {
+					haIfaceAliases = append(haIfaceAliases, haInterface.GetAlias())
+				}
+
+				haIfacesClockStateQuery = metrics.ClockStateQuery{
+					Interface: metrics.Includes(haIfaceAliases...),
+					Node:      metrics.Equals(nodeName),
+				}
+
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, haIfacesClockStateQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(3*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert all HA interfaces are in LOCKED state")
+
+				By("validating HA system returns to healthy state")
+				waitForHAHealthy(prometheusAPI, nodeName, len(haInterfaces), 2*time.Minute)
+
+				By("validating CLOCK_REALTIME returns to LOCKED state")
+
+				clockRealtimeQuery = metrics.ClockStateQuery{
+					Interface: metrics.Equals(iface.ClockRealtime),
+					Node:      metrics.Equals(nodeName),
+				}
+				err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
+					metrics.AssertWithTimeout(3*time.Minute),
+					metrics.AssertWithStableDuration(10*time.Second))
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
+
+				break
 			}
 
-			By("restoring HA interfaces")
-
-			for _, haInterface := range haInterfaces {
-				err = iface.SetInterfaceStatus(RANConfig.Spoke1APIClient, nodeName, haInterface, iface.InterfaceStateUp)
-				Expect(err).ToNot(HaveOccurred(), "Failed to restore HA interface %s", haInterface)
+			if !testActuallyRan {
+				Skip("Could not find any HA configuration to test")
 			}
+		})
 
-			By("validating all Clock State metrics return to LOCKED state")
+		Context("HA profile configuration deletion", func() {
+			// 73095 - Validating HA failover when active profile configuration is deleted
+			It("should change high availability active profile when active profile is deleted",
+				reportxml.ID("73095"), func() {
+					testActuallyRan := false
 
-			haIfaceAliases = make([]iface.Alias, 0, len(haInterfaces))
-			for _, haInterface := range haInterfaces {
-				haIfaceAliases = append(haIfaceAliases, haInterface.GetAlias())
-			}
+					By("getting node info map")
 
-			haIfacesClockStateQuery = metrics.ClockStateQuery{
-				Interface: metrics.Includes(haIfaceAliases...),
-				Node:      metrics.Equals(nodeName),
-			}
+					nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+					Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, haIfacesClockStateQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(3*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert all HA interfaces are in LOCKED state")
+					for nodeName, nodeInfo := range nodeInfoMap {
+						By("checking if node has HA configuration")
 
-			By("validating HA system returns to healthy state")
-			waitForHAHealthy(prometheusAPI, nodeName, len(haInterfaces), 2*time.Minute)
+						if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
+							klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
 
-			By("validating CLOCK_REALTIME returns to LOCKED state")
+							continue
+						}
 
-			clockRealtimeQuery = metrics.ClockStateQuery{
-				Interface: metrics.Equals(iface.ClockRealtime),
-				Node:      metrics.Equals(nodeName),
-			}
-			err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockRealtimeQuery, metrics.ClockStateLocked,
-				metrics.AssertWithTimeout(3*time.Minute),
-				metrics.AssertWithStableDuration(10*time.Second))
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert CLOCK_REALTIME is LOCKED")
+						testActuallyRan = true
 
-			break
-		}
+						totalHAProfiles := 0
 
-		if !testActuallyRan {
-			Skip("Could not find any HA configuration to test")
-		}
-	})
+						By("getting the active HA profile & total number of HA profiles")
 
-	Context("HA profile configuration deletion", func() {
-		// 73095 - Validating HA failover when active profile configuration is deleted
-		It("should change high availability active profile when active profile is deleted",
-			reportxml.ID("73095"), func() {
-				testActuallyRan := false
+						activeProfiles, err := profiles.GetHAProfiles(context.TODO(),
+							prometheusAPI, nodeName, metrics.HAProfileStatusActive)
+						Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
+						Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
 
-				By("getting node info map")
+						activeProfileName := activeProfiles[0]
+						totalHAProfiles++
 
-				nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-				Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+						By(fmt.Sprintf("getting the PtpConfig for active profile %s", activeProfileName))
+						activeProfileInfo := nodeInfo.GetProfileByDaemonName(activeProfileName)
+						Expect(activeProfileInfo).ToNot(BeNil(), "Failed to find profile info for active profile %s", activeProfileName)
 
-				for nodeName, nodeInfo := range nodeInfoMap {
-					By("checking if node has HA configuration")
+						By(fmt.Sprintf("pulling PtpConfig %s", activeProfileInfo.Reference.ConfigReference.Name))
+						activeProfilePtpConfig, err := activeProfileInfo.Reference.PullPtpConfig(RANConfig.Spoke1APIClient)
+						Expect(err).ToNot(HaveOccurred(), "Failed to pull PtpConfig")
 
-					if nodeInfo.Counts[profiles.ProfileTypeHA] == 0 {
-						klog.V(tsparams.LogLevel).Infof("Node %s has no HA configuration, skipping", nodeName)
+						inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(),
+							prometheusAPI, nodeName, metrics.HAProfileStatusInactive)
+						Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
+						Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
+						totalHAProfiles += len(inactiveProfiles)
 
-						continue
+						DeferCleanup(func() {
+							By("validating HA is healthy after restoration")
+							waitForHAHealthy(prometheusAPI, nodeName, totalHAProfiles, 5*time.Minute)
+
+							By("validating all clocks are locked after restoration")
+
+							err = metrics.EnsureClocksAreLocked(prometheusAPI)
+							Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are locked after restoration")
+						})
+
+						By(fmt.Sprintf("deleting PtpProfile %s from PtpConfig %s",
+							activeProfileName, activeProfilePtpConfig.Definition.Name))
+
+						err = profiles.RemoveProfileFromConfig(RANConfig.Spoke1APIClient, activeProfileInfo.Reference)
+						Expect(err).ToNot(HaveOccurred(),
+							"Failed to delete PtpProfile %s from PtpConfig %s",
+							activeProfileName, activeProfilePtpConfig.Definition.Name)
+
+						By("validating active profile has changed")
+
+						newActiveProfile := waitForActiveHAProfileChange(prometheusAPI, nodeName, activeProfileName, 2*time.Minute)
+
+						By("validating new active interface is in LOCKED state")
+
+						newActiveInterface := getHAProfileClientInterface(nodeInfo, newActiveProfile)
+						nicName := newActiveInterface.GetAlias()
+						clockStateQuery := metrics.ClockStateQuery{
+							Interface: metrics.Equals(nicName),
+							Node:      metrics.Equals(nodeName),
+						}
+						err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateLocked,
+							metrics.AssertWithTimeout(3*time.Minute),
+							metrics.AssertWithStableDuration(10*time.Second))
+						Expect(err).ToNot(HaveOccurred(), "Failed to assert new active interface is LOCKED")
+
+						// Test only on first HA node found
+						break
 					}
 
-					testActuallyRan = true
-
-					totalHAProfiles := 0
-
-					By("getting the active HA profile & total number of HA profiles")
-
-					activeProfiles, err := profiles.GetHAProfiles(context.TODO(),
-						prometheusAPI, nodeName, metrics.HAProfileStatusActive)
-					Expect(err).ToNot(HaveOccurred(), "Failed to get active HA profiles")
-					Expect(len(activeProfiles)).To(Equal(1), "Expected exactly one active HA profile")
-
-					activeProfileName := activeProfiles[0]
-					totalHAProfiles++
-
-					By(fmt.Sprintf("getting the PtpConfig for active profile %s", activeProfileName))
-					activeProfileInfo := nodeInfo.GetProfileByDaemonName(activeProfileName)
-					Expect(activeProfileInfo).ToNot(BeNil(), "Failed to find profile info for active profile %s", activeProfileName)
-
-					By(fmt.Sprintf("pulling PtpConfig %s", activeProfileInfo.Reference.ConfigReference.Name))
-					activeProfilePtpConfig, err := activeProfileInfo.Reference.PullPtpConfig(RANConfig.Spoke1APIClient)
-					Expect(err).ToNot(HaveOccurred(), "Failed to pull PtpConfig")
-
-					inactiveProfiles, err := profiles.GetHAProfiles(context.TODO(),
-						prometheusAPI, nodeName, metrics.HAProfileStatusInactive)
-					Expect(err).ToNot(HaveOccurred(), "Failed to get inactive HA profiles")
-					Expect(len(inactiveProfiles)).To(BeNumerically(">=", 1), "Expected at least one inactive HA profile")
-					totalHAProfiles += len(inactiveProfiles)
-
-					DeferCleanup(func() {
-						By("validating HA is healthy after restoration")
-						waitForHAHealthy(prometheusAPI, nodeName, totalHAProfiles, 5*time.Minute)
-
-						By("validating all clocks are locked after restoration")
-
-						err = metrics.EnsureClocksAreLocked(prometheusAPI)
-						Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are locked after restoration")
-					})
-
-					By(fmt.Sprintf("deleting PtpProfile %s from PtpConfig %s",
-						activeProfileName, activeProfilePtpConfig.Definition.Name))
-
-					err = profiles.RemoveProfileFromConfig(RANConfig.Spoke1APIClient, activeProfileInfo.Reference)
-					Expect(err).ToNot(HaveOccurred(),
-						"Failed to delete PtpProfile %s from PtpConfig %s",
-						activeProfileName, activeProfilePtpConfig.Definition.Name)
-
-					By("validating active profile has changed")
-
-					newActiveProfile := waitForActiveHAProfileChange(prometheusAPI, nodeName, activeProfileName, 2*time.Minute)
-
-					By("validating new active interface is in LOCKED state")
-
-					newActiveInterface := getHAProfileClientInterface(nodeInfo, newActiveProfile)
-					nicName := newActiveInterface.GetAlias()
-					clockStateQuery := metrics.ClockStateQuery{
-						Interface: metrics.Equals(nicName),
-						Node:      metrics.Equals(nodeName),
+					if !testActuallyRan {
+						Skip("Could not find any HA configuration to test")
 					}
-					err = metrics.AssertQuery(context.TODO(), prometheusAPI, clockStateQuery, metrics.ClockStateLocked,
-						metrics.AssertWithTimeout(3*time.Minute),
-						metrics.AssertWithStableDuration(10*time.Second))
-					Expect(err).ToNot(HaveOccurred(), "Failed to assert new active interface is LOCKED")
-
-					// Test only on first HA node found
-					break
-				}
-
-				if !testActuallyRan {
-					Skip("Could not find any HA configuration to test")
-				}
-			})
+				})
+		})
 	})
 })
 

@@ -12,6 +12,8 @@ import (
 var (
 	baselineMu      sync.RWMutex
 	baselineConfigs []*ptp.PtpConfigBuilder
+	recoveryFailed  bool
+	recoveryErr     error
 )
 
 // CaptureBaseline stores a snapshot of all PtpConfigs in the cluster for suite-level recovery.
@@ -24,6 +26,8 @@ func CaptureBaseline(client *clients.Settings) error {
 
 	baselineMu.Lock()
 	baselineConfigs = saved
+	recoveryFailed = false
+	recoveryErr = nil
 	baselineMu.Unlock()
 
 	return nil
@@ -45,4 +49,31 @@ func RestoreBaseline(client *clients.Settings) ([]*profiles.ProfileReference, er
 	}
 
 	return changed, nil
+}
+
+// RecoveryAlreadyFailed reports whether suite baseline recovery already failed to restore LOCKED
+// clocks in this suite. When true, later specs must not wait another five minutes on the same
+// FREERUN state (CNF-26726).
+func RecoveryAlreadyFailed() (bool, error) {
+	baselineMu.RLock()
+	defer baselineMu.RUnlock()
+
+	return recoveryFailed, recoveryErr
+}
+
+// MarkRecoveryFailed records that suite baseline recovery did not restore LOCKED clocks.
+func MarkRecoveryFailed(err error) {
+	baselineMu.Lock()
+	recoveryFailed = true
+	recoveryErr = err
+	baselineMu.Unlock()
+}
+
+// ResetRecoveryState clears the suite recovery-failure flag. Tests use this to isolate cases;
+// CaptureBaseline also clears it at suite start.
+func ResetRecoveryState() {
+	baselineMu.Lock()
+	recoveryFailed = false
+	recoveryErr = nil
+	baselineMu.Unlock()
 }

@@ -50,6 +50,10 @@ var _ = Describe("PTP T-GM GNSS Loss", Label(tsparams.LabelGNSSLoss), func() {
 			Skip("Test is valid from PTP version 4.18 and higher")
 		}
 
+		skipIfNoNodeHasProfileTypes(
+			"Test requires Grandmaster configuration",
+			profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
+
 		By("creating a Prometheus API client")
 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)

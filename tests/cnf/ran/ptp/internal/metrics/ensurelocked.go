@@ -42,7 +42,7 @@ func EnsureClocksAreLocked(prometheusAPI prometheusv1.API) error {
 }
 
 // EnsureClocksAreLockedForSpecSetup performs a short lock check used before individual specs.
-// Callers should attempt cluster recovery and skip the spec when this returns an error.
+// Callers should attempt cluster recovery and fail the spec when this returns an error.
 func EnsureClocksAreLockedForSpecSetup(prometheusAPI prometheusv1.API) error {
 	return ensureClocksAreLocked(prometheusAPI, beforeSpecClockLockTimeout)
 }

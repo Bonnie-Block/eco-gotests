@@ -39,6 +39,10 @@ var _ = Describe("PTP T-GM SMA Disconnect", Label(tsparams.LabelSMADisconnect), 
 			Skip("Test is valid from PTP version 4.18 and higher")
 		}
 
+		skipIfNoNodeHasProfileTypes(
+			"No Multi-NIC GM profiles found — SMA disconnect test not applicable",
+			profiles.ProfileTypeMultiNICGM)
+
 		By("creating a Prometheus API client")
 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)

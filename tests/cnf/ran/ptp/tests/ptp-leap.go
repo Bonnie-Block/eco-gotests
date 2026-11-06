@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/querier"
 	. "github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/raninittools"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/internal/ranparam"
-	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/metrics"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/profiles"
 	"github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/ptpdaemon"
 	ptpleap "github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/ran/ptp/internal/ptpleap"
@@ -38,25 +36,9 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 		// Unlike most PTP tests, which check profile eligibility inside each It block, this test
 		// checks in BeforeEach to avoid a misleading lock timeout on configs that have no GM
 		// profiles (e.g. BC-only). See CNF-26740.
-		By("skipping if no GM or Multi-NIC GM profiles are configured")
-
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
-
-		hasGMNode := false
-
-		for _, nodeInfo := range nodeInfoMap {
-			if nodeInfo.Counts[profiles.ProfileTypeGM] > 0 ||
-				nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] > 0 {
-				hasGMNode = true
-
-				break
-			}
-		}
-
-		if !hasGMNode {
-			Skip("No GM or Multi-NIC GM profiles found — leap test not applicable")
-		}
+		skipIfNoNodeHasProfileTypes(
+			"No GM or Multi-NIC GM profiles found — leap test not applicable",
+			profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
 
 		ensureClocksLockedBeforeSpec(prometheusAPI)
 	})
@@ -81,12 +63,7 @@ var _ = Describe("PTP Leap File", Label(tsparams.LabelLeapFile), func() {
 		_, err = ptpDaemonPod.DeleteAndWait(5 * time.Minute)
 		Expect(err).ToNot(HaveOccurred(), "Failed to delete PTP daemon set pod")
 
-		By("ensuring clocks are locked after testing")
-
-		err = metrics.AssertQuery(context.TODO(), prometheusAPI, metrics.ClockStateQuery{}, metrics.ClockStateLocked,
-			metrics.AssertWithStableDuration(10*time.Second),
-			metrics.AssertWithTimeout(5*time.Minute))
-		Expect(err).ToNot(HaveOccurred(), "Failed to assert clock state is locked")
+		ensureClocksLockedAfterSpec(prometheusAPI)
 	})
 
 	It("should add leap event announcement in leap configmap when removing the last announcement",

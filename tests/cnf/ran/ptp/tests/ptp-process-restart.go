@@ -45,6 +45,20 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Prometheus API client")
 
+		By("saving PtpConfigs before testing")
+
+		savedPtpConfigs, err = profiles.SavePtpConfigs(RANConfig.Spoke1APIClient)
+		Expect(err).ToNot(HaveOccurred(), "Failed to save PtpConfigs")
+
+		configSupported, err = version.IsVersionStringInRange(
+			RANConfig.Spoke1OperatorVersions[ranparam.PTP], "4.21.0-0", "")
+		Expect(err).ToNot(HaveOccurred(), "Failed to check PTP version range")
+		clockClass7Supported, err = version.IsVersionStringInRange(
+			RANConfig.Spoke1OperatorVersions[ranparam.PTP], "4.18.0-0", "")
+		Expect(err).ToNot(HaveOccurred(), "Failed to check clock class 7 supported")
+	})
+
+	JustBeforeEach(func() {
 		ensureClocksLockedBeforeSpec(prometheusAPI)
 
 		By("ensuring phc2sys is running on PTP nodes before testing")
@@ -58,18 +72,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 			Expect(err).ToNot(HaveOccurred(),
 				"Failed to wait for phc2sys to be running on node %s", nodeInfo.Name)
 		}
-
-		By("saving PtpConfigs before testing")
-
-		savedPtpConfigs, err = profiles.SavePtpConfigs(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to save PtpConfigs")
-
-		configSupported, err = version.IsVersionStringInRange(
-			RANConfig.Spoke1OperatorVersions[ranparam.PTP], "4.21.0-0", "")
-		Expect(err).ToNot(HaveOccurred(), "Failed to check PTP version range")
-		clockClass7Supported, err = version.IsVersionStringInRange(
-			RANConfig.Spoke1OperatorVersions[ranparam.PTP], "4.18.0-0", "")
-		Expect(err).ToNot(HaveOccurred(), "Failed to check clock class 7 supported")
 	})
 
 	AfterEach(func() {
@@ -270,28 +272,146 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 		}
 	})
 
-	// 49737 - Ptp4l restart - single process
-	It("verifies recovery after killing a ptp4l process related to phc2sys", reportxml.ID("49737"), func() {
-		testRanAtLeastOnce := false
+	Context("ptp4l restart without HA", func() {
+		BeforeEach(func() {
+			skipIfNoNodeWithoutProfileType(
+				"No nodes without HA configuration to run the test on", profiles.ProfileTypeHA)
+		})
 
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+		// 49737 - Ptp4l restart - single process
+		It("verifies recovery after killing a ptp4l process related to phc2sys", reportxml.ID("49737"), func() {
+			testRanAtLeastOnce := false
 
-		for _, nodeInfo := range nodeInfoMap {
-			if nodeInfo.Counts[profiles.ProfileTypeHA] > 0 {
-				klog.V(tsparams.LogLevel).Infof("Skipping node %s because it has HA configuration", nodeInfo.Name)
+			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
-				continue
-			}
+			for _, nodeInfo := range nodeInfoMap {
+				if nodeInfo.Counts[profiles.ProfileTypeHA] > 0 {
+					klog.V(tsparams.LogLevel).Infof("Skipping node %s because it has HA configuration", nodeInfo.Name)
 
-			testRanAtLeastOnce = true
+					continue
+				}
 
-			By("updating the holdover timeout for all profiles on the node")
+				testRanAtLeastOnce = true
 
-			oldHoldovers, err := profiles.SetHoldOverTimeouts(RANConfig.Spoke1APIClient, nodeInfo.Profiles, 180)
-			Expect(err).ToNot(HaveOccurred(), "Failed to set holdover timeout for profiles on node %s", nodeInfo.Name)
+				By("updating the holdover timeout for all profiles on the node")
 
-			DeferCleanup(func() {
+				oldHoldovers, err := profiles.SetHoldOverTimeouts(RANConfig.Spoke1APIClient, nodeInfo.Profiles, 180)
+				Expect(err).ToNot(HaveOccurred(), "Failed to set holdover timeout for profiles on node %s", nodeInfo.Name)
+
+				DeferCleanup(func() {
+					By("resetting the holdover timeout for all profiles on the node")
+
+					err = profiles.ResetHoldOverTimeouts(RANConfig.Spoke1APIClient, oldHoldovers)
+					Expect(err).ToNot(HaveOccurred(), "Failed to reset holdover timeout for profiles on node %s", nodeInfo.Name)
+
+					By("waiting for the holdover timeout to be reset to original values")
+
+					err = profiles.WaitForOldHoldOverTimeouts(prometheusAPI, nodeInfo.Name, oldHoldovers, 5*time.Minute)
+					Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be reset to original values")
+				})
+
+				By("waiting for the new holdover timeout to show up in the metrics")
+
+				err = profiles.WaitForHoldOverTimeouts(
+					prometheusAPI, nodeInfo.Name, nodeInfo.Profiles, 180, 5*time.Minute)
+				Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be set to 180 after 5 minutes")
+
+				By("getting the event pod for the node")
+
+				eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeInfo.Name)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeInfo.Name)
+
+				By("getting ptp4l PIDs related to phc2sys on node " + nodeInfo.Name)
+
+				oldPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
+					RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys, true)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
+				Expect(oldPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
+
+				ptp4lPIDToKill := oldPtp4lPIDs[0]
+
+				By("getting the phc2sys PID")
+
+				oldPhc2sysPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get phc2sys PID for node %s", nodeInfo.Name)
+
+				By("killing the ptp4l process related to the phc2sys process")
+
+				startTime := time.Now()
+
+				err = processes.KillProcessByPID(RANConfig.Spoke1APIClient, nodeInfo.Name, ptp4lPIDToKill)
+				Expect(err).ToNot(HaveOccurred(), "Failed to kill ptp4l process for node %s", nodeInfo.Name)
+
+				// There is no FREERUN event, and therefore no LOCKED event, for GM profiles on /master. We
+				// assume that a node which has a GM profile will have the phc2sys process configured for the GM
+				// profile. This will be the reality in production use cases.
+				hasGMProfile := nodeInfo.Counts[profiles.ProfileTypeGM] > 0 ||
+					nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] > 0 ||
+					nodeInfo.Counts[profiles.ProfileTypeNTPFallback] > 0
+
+				if !hasGMProfile {
+					By("waiting for the FREERUN event to be received after killing the ptp4l process")
+
+					filter := events.All(
+						events.IsType(eventptp.PtpStateChange),
+						events.HasValue(events.WithSyncState(eventptp.FREERUN), events.ContainingResource(string(iface.Master))),
+					)
+					err = events.WaitForEvent(
+						eventPod, startTime, 2*time.Minute, filter, events.WithoutCurrentState(true))
+					Expect(err).ToNot(HaveOccurred(), "Failed to wait for free run event on node %s", nodeInfo.Name)
+				}
+
+				By("waiting for the FREERUN event to be received for CLOCK_REALTIME")
+
+				filter := events.All(
+					events.IsType(eventptp.OsClockSyncStateChange),
+					events.HasValue(events.WithSyncState(eventptp.FREERUN), events.OnInterface(iface.ClockRealtime)),
+				)
+				err = events.WaitForEvent(eventPod, startTime, 2*time.Minute, filter, events.WithoutCurrentState(true))
+				Expect(err).ToNot(HaveOccurred(), "Failed to wait for free run event on node %s", nodeInfo.Name)
+
+				if !hasGMProfile {
+					By("waiting for the LOCKED event to be received after ptp4l process recovery")
+
+					filter = events.All(
+						events.IsType(eventptp.PtpStateChange),
+						events.HasValue(events.WithSyncState(eventptp.LOCKED), events.ContainingResource(string(iface.Master))),
+					)
+					err = events.WaitForEvent(
+						eventPod, startTime, 3*time.Minute, filter, events.WithoutCurrentState(true))
+					Expect(err).ToNot(HaveOccurred(), "Failed to wait for locked event on node %s", nodeInfo.Name)
+				}
+
+				By("waiting for the LOCKED event to be received for CLOCK_REALTIME")
+
+				filter = events.All(
+					events.IsType(eventptp.OsClockSyncStateChange),
+					events.HasValue(events.WithSyncState(eventptp.LOCKED), events.OnInterface(iface.ClockRealtime)),
+				)
+				err = events.WaitForEvent(eventPod, startTime, 3*time.Minute, filter, events.WithoutCurrentState(true))
+				Expect(err).ToNot(HaveOccurred(), "Failed to wait for locked event on node %s", nodeInfo.Name)
+
+				By("ensuring the phc2sys process was not affected by killing the ptp4l process")
+
+				newPhc2sysPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get phc2sys PID for node %s", nodeInfo.Name)
+				Expect(newPhc2sysPID).To(Equal(oldPhc2sysPID), "phc2sys PID changed: "+oldPhc2sysPID)
+
+				By("ensuring a new ptp4l process is started")
+
+				newPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
+					RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys, true)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
+				Expect(newPtp4lPIDs).ToNot(BeEmpty(), "No new ptp4l PIDs found for node %s", nodeInfo.Name)
+				Expect(newPtp4lPIDs).ToNot(ContainElement(ptp4lPIDToKill),
+					"New ptp4l PIDs contain the PID that was killed: %s", ptp4lPIDToKill)
+
+				By("ensuring all clocks are in LOCKED state in metrics")
+
+				err = metrics.EnsureClocksAreLocked(prometheusAPI)
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are LOCKED on node %s", nodeInfo.Name)
+
 				By("resetting the holdover timeout for all profiles on the node")
 
 				err = profiles.ResetHoldOverTimeouts(RANConfig.Spoke1APIClient, oldHoldovers)
@@ -301,126 +421,20 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 
 				err = profiles.WaitForOldHoldOverTimeouts(prometheusAPI, nodeInfo.Name, oldHoldovers, 5*time.Minute)
 				Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be reset to original values")
-			})
-
-			By("waiting for the new holdover timeout to show up in the metrics")
-
-			err = profiles.WaitForHoldOverTimeouts(
-				prometheusAPI, nodeInfo.Name, nodeInfo.Profiles, 180, 5*time.Minute)
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be set to 180 after 5 minutes")
-
-			By("getting the event pod for the node")
-
-			eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeInfo.Name)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeInfo.Name)
-
-			By("getting ptp4l PIDs related to phc2sys on node " + nodeInfo.Name)
-
-			oldPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
-				RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys, true)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
-			Expect(oldPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
-
-			ptp4lPIDToKill := oldPtp4lPIDs[0]
-
-			By("getting the phc2sys PID")
-
-			oldPhc2sysPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get phc2sys PID for node %s", nodeInfo.Name)
-
-			By("killing the ptp4l process related to the phc2sys process")
-
-			startTime := time.Now()
-
-			err = processes.KillProcessByPID(RANConfig.Spoke1APIClient, nodeInfo.Name, ptp4lPIDToKill)
-			Expect(err).ToNot(HaveOccurred(), "Failed to kill ptp4l process for node %s", nodeInfo.Name)
-
-			// There is no FREERUN event, and therefore no LOCKED event, for GM profiles on /master. We
-			// assume that a node which has a GM profile will have the phc2sys process configured for the GM
-			// profile. This will be the reality in production use cases.
-			hasGMProfile := nodeInfo.Counts[profiles.ProfileTypeGM] > 0 ||
-				nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] > 0 ||
-				nodeInfo.Counts[profiles.ProfileTypeNTPFallback] > 0
-
-			if !hasGMProfile {
-				By("waiting for the FREERUN event to be received after killing the ptp4l process")
-
-				filter := events.All(
-					events.IsType(eventptp.PtpStateChange),
-					events.HasValue(events.WithSyncState(eventptp.FREERUN), events.ContainingResource(string(iface.Master))),
-				)
-				err = events.WaitForEvent(
-					eventPod, startTime, 2*time.Minute, filter, events.WithoutCurrentState(true))
-				Expect(err).ToNot(HaveOccurred(), "Failed to wait for free run event on node %s", nodeInfo.Name)
 			}
 
-			By("waiting for the FREERUN event to be received for CLOCK_REALTIME")
-
-			filter := events.All(
-				events.IsType(eventptp.OsClockSyncStateChange),
-				events.HasValue(events.WithSyncState(eventptp.FREERUN), events.OnInterface(iface.ClockRealtime)),
-			)
-			err = events.WaitForEvent(eventPod, startTime, 2*time.Minute, filter, events.WithoutCurrentState(true))
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for free run event on node %s", nodeInfo.Name)
-
-			if !hasGMProfile {
-				By("waiting for the LOCKED event to be received after ptp4l process recovery")
-
-				filter = events.All(
-					events.IsType(eventptp.PtpStateChange),
-					events.HasValue(events.WithSyncState(eventptp.LOCKED), events.ContainingResource(string(iface.Master))),
-				)
-				err = events.WaitForEvent(
-					eventPod, startTime, 3*time.Minute, filter, events.WithoutCurrentState(true))
-				Expect(err).ToNot(HaveOccurred(), "Failed to wait for locked event on node %s", nodeInfo.Name)
+			if !testRanAtLeastOnce {
+				Skip("No nodes without HA configuration to run the test on")
 			}
-
-			By("waiting for the LOCKED event to be received for CLOCK_REALTIME")
-
-			filter = events.All(
-				events.IsType(eventptp.OsClockSyncStateChange),
-				events.HasValue(events.WithSyncState(eventptp.LOCKED), events.OnInterface(iface.ClockRealtime)),
-			)
-			err = events.WaitForEvent(eventPod, startTime, 3*time.Minute, filter, events.WithoutCurrentState(true))
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for locked event on node %s", nodeInfo.Name)
-
-			By("ensuring the phc2sys process was not affected by killing the ptp4l process")
-
-			newPhc2sysPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get phc2sys PID for node %s", nodeInfo.Name)
-			Expect(newPhc2sysPID).To(Equal(oldPhc2sysPID), "phc2sys PID changed: "+oldPhc2sysPID)
-
-			By("ensuring a new ptp4l process is started")
-
-			newPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
-				RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Phc2sys, true)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
-			Expect(newPtp4lPIDs).ToNot(BeEmpty(), "No new ptp4l PIDs found for node %s", nodeInfo.Name)
-			Expect(newPtp4lPIDs).ToNot(ContainElement(ptp4lPIDToKill),
-				"New ptp4l PIDs contain the PID that was killed: %s", ptp4lPIDToKill)
-
-			By("ensuring all clocks are in LOCKED state in metrics")
-
-			err = metrics.EnsureClocksAreLocked(prometheusAPI)
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are LOCKED on node %s", nodeInfo.Name)
-
-			By("resetting the holdover timeout for all profiles on the node")
-
-			err = profiles.ResetHoldOverTimeouts(RANConfig.Spoke1APIClient, oldHoldovers)
-			Expect(err).ToNot(HaveOccurred(), "Failed to reset holdover timeout for profiles on node %s", nodeInfo.Name)
-
-			By("waiting for the holdover timeout to be reset to original values")
-
-			err = profiles.WaitForOldHoldOverTimeouts(prometheusAPI, nodeInfo.Name, oldHoldovers, 5*time.Minute)
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for holdover timeout to be reset to original values")
-		}
-
-		if !testRanAtLeastOnce {
-			Skip("No nodes without HA configuration to run the test on")
-		}
+		})
 	})
 
 	Context("GM process restart", func() {
+		BeforeEach(func() {
+			skipIfNoNodeHasProfileTypes(
+				"No GM nodes found", profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
+		})
+
 		It("validates ts2phc process recover after a ts2phc process restart",
 			reportxml.ID("59863"), func() {
 				testRanAtLeastOnce := false
@@ -560,6 +574,12 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 	})
 
 	Context("sidecar container recovery", func() {
+		BeforeEach(func() {
+			skipIfNoNodeHasProfileTypes(
+				"Test requires Grandmaster configuration",
+				profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
+		})
+
 		// 84297 - should verify events are logged during sidecar recovery
 		It("should verify events are logged during sidecar recovery", reportxml.ID("84297"), func() {
 			testRanAtLeastOnce := false
@@ -666,172 +686,179 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 		})
 	})
 
-	It("Validates T-GM config ptp4l process recover after restart that process", reportxml.ID("59864"), func() {
-		testRanAtLeastOnce := false
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+	Context("T-GM process recovery", func() {
+		BeforeEach(func() {
+			skipIfNoNodeHasProfileTypes(
+				"No GM nodes found", profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
+		})
 
-		for _, nodeInfo := range nodeInfoMap {
-			// Checks only ptp4l process related to ts2phc on T-GM nodes
-			if nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] == 0 &&
-				nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
-				continue
+		It("Validates T-GM config ptp4l process recover after restart that process", reportxml.ID("59864"), func() {
+			testRanAtLeastOnce := false
+			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+
+			for _, nodeInfo := range nodeInfoMap {
+				// Checks only ptp4l process related to ts2phc on T-GM nodes
+				if nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] == 0 &&
+					nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
+					continue
+				}
+
+				testRanAtLeastOnce = true
+
+				By("getting the ptp4l PIDs by related to T-GM config")
+
+				oldPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
+					RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc, true)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
+				Expect(oldPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
+				Expect(len(oldPtp4lPIDs)).To(Equal(1), "Expected 1 ptp4l PID related to ts2phc for node %s", nodeInfo.Name)
+
+				ptp4lPIDToKill := oldPtp4lPIDs[0]
+
+				By("killing ptp4l process related to T-GM config")
+
+				err = processes.KillProcessByPID(RANConfig.Spoke1APIClient, nodeInfo.Name, ptp4lPIDToKill)
+				Expect(err).ToNot(HaveOccurred(), "Failed to kill ptp4l process for node %s", nodeInfo.Name)
+
+				By("waiting for the all clocks state to transition back to LOCKED")
+
+				err = metrics.EnsureClocksAreLocked(prometheusAPI)
+				Expect(err).ToNot(HaveOccurred(), "Failed to ensure clocks are LOCKED on node %s", nodeInfo.Name)
+
+				By("validate a new ptp4l process is started")
+
+				newPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
+					RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc, true)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
+				Expect(newPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
+				Expect(len(newPtp4lPIDs)).To(Equal(1), "Expected 1 ptp4l PID related to ts2phc for node %s", nodeInfo.Name)
+				Expect(newPtp4lPIDs).NotTo(Equal(oldPtp4lPIDs), "ptp4l PID did not change: "+oldPtp4lPIDs[0])
 			}
 
-			testRanAtLeastOnce = true
+			if !testRanAtLeastOnce {
+				Skip("No GM nodes found")
+			}
+		})
 
-			By("getting the ptp4l PIDs by related to T-GM config")
+		It("Validates gpsd process recovery after restart that process", reportxml.ID("64777"), func() {
+			testRanAtLeastOnce := false
 
-			oldPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
-				RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc, true)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
-			Expect(oldPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
-			Expect(len(oldPtp4lPIDs)).To(Equal(1), "Expected 1 ptp4l PID related to ts2phc for node %s", nodeInfo.Name)
+			nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
+			Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
 
-			ptp4lPIDToKill := oldPtp4lPIDs[0]
+			for _, nodeInfo := range nodeInfoMap {
+				// checks only gpsd process on GM nodes
+				if nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] == 0 &&
+					nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
+					continue
+				}
 
-			By("killing ptp4l process related to T-GM config")
+				testRanAtLeastOnce = true
 
-			err = processes.KillProcessByPID(RANConfig.Spoke1APIClient, nodeInfo.Name, ptp4lPIDToKill)
-			Expect(err).ToNot(HaveOccurred(), "Failed to kill ptp4l process for node %s", nodeInfo.Name)
+				By("getting the gpsd PID")
 
-			By("waiting for the all clocks state to transition back to LOCKED")
+				oldGpsdPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Gpsd)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get gpsd PID for node %s", nodeInfo.Name)
 
-			err = metrics.EnsureClocksAreLocked(prometheusAPI)
-			Expect(err).ToNot(HaveOccurred(), "Failed to ensure clocks are LOCKED on node %s", nodeInfo.Name)
+				startTime := time.Now()
 
-			By("validate a new ptp4l process is started")
+				By("killing the gpsd process twice")
 
-			newPtp4lPIDs, err := processes.GetPtp4lPIDsByRelatedProcess(
-				RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc, true)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get ptp4l PIDs by related process for node %s", nodeInfo.Name)
-			Expect(newPtp4lPIDs).ToNot(BeEmpty(), "No ptp4l PIDs found for node %s", nodeInfo.Name)
-			Expect(len(newPtp4lPIDs)).To(Equal(1), "Expected 1 ptp4l PID related to ts2phc for node %s", nodeInfo.Name)
-			Expect(newPtp4lPIDs).NotTo(Equal(oldPtp4lPIDs), "ptp4l PID did not change: "+oldPtp4lPIDs[0])
-		}
+				err = processes.KillPtpProcessMultipleTimes(RANConfig.Spoke1APIClient,
+					nodeInfo.Name, processes.Gpsd, 2)
+				Expect(err).ToNot(HaveOccurred(), "Failed to kill gpsd process for node %s", nodeInfo.Name)
 
-		if !testRanAtLeastOnce {
-			Skip("No GM nodes found")
-		}
-	})
+				var clockClassFilter events.EventFilter
 
-	It("Validates gpsd process recovery after restart that process", reportxml.ID("64777"), func() {
-		testRanAtLeastOnce := false
+				clockClassValue := int64(7)
+				if !clockClass7Supported {
+					clockClassValue = int64(248)
+				}
 
-		nodeInfoMap, err := profiles.GetNodeInfoMap(RANConfig.Spoke1APIClient)
-		Expect(err).ToNot(HaveOccurred(), "Failed to get node info map")
+				clockClassFilter = events.All(
+					events.IsType(eventptp.PtpClockClassChange),
+					events.HasValue(
+						events.WithMetric(clockClassValue),
+						events.ContainingResource(string(iface.Master)),
+					),
+				)
 
-		for _, nodeInfo := range nodeInfoMap {
-			// checks only gpsd process on GM nodes
-			if nodeInfo.Counts[profiles.ProfileTypeMultiNICGM] == 0 &&
-				nodeInfo.Counts[profiles.ProfileTypeGM] == 0 {
-				continue
+				By("waiting for a event.sync.ptp-status.ptp-clock-class-change to " +
+					strconv.FormatInt(clockClassValue, 10) + " on the consumer pod")
+
+				eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeInfo.Name)
+
+				Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeInfo.Name)
+				err = events.WaitForEvent(
+					eventPod, startTime, 3*time.Minute, clockClassFilter, events.WithoutCurrentState(true))
+				Expect(err).ToNot(HaveOccurred(), "Failed to wait for consumer clock class change event on node %s", nodeInfo.Name)
+
+				By("waiting for the all clocks state to transition back to LOCKED")
+
+				lockedQuery := metrics.ClockStateQuery{
+					Node: metrics.Equals(nodeInfo.Name),
+				}
+				err = metrics.AssertQuery(
+					context.TODO(),
+					prometheusAPI,
+					lockedQuery,
+					metrics.ClockStateLocked,
+					metrics.AssertWithStableDuration(10*time.Second),
+					metrics.AssertWithTimeout(5*time.Minute),
+					metrics.AssertWithStartTime(startTime),
+				)
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are LOCKED on node %s", nodeInfo.Name)
+
+				By("getting the new gpsd PID")
+
+				newGpsdPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Gpsd)
+				Expect(err).ToNot(HaveOccurred(), "Failed to get gpsd PID for node %s", nodeInfo.Name)
+				Expect(newGpsdPID).NotTo(Equal(oldGpsdPID), "gpsd PID did not change: "+oldGpsdPID)
+
+				clockClassFilter = events.All(
+					events.IsType(eventptp.PtpClockClassChange),
+					events.HasValue(
+						events.WithMetric(6),
+						events.ContainingResource(string(iface.Master)),
+					),
+				)
+
+				By("waiting for event.sync.ptp-status.ptp-clock-class-change to 6")
+
+				err = events.WaitForEvent(
+					eventPod, startTime, 3*time.Minute, clockClassFilter, events.WithoutCurrentState(true))
+				Expect(err).ToNot(HaveOccurred(), "Failed to wait for consumer clock class change event on node %s", nodeInfo.Name)
+
+				var configFile string
+				if configSupported {
+					configFile, err = processes.GetPtp4lConfigByRelatedProcess(
+						RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc)
+					Expect(err).ToNot(HaveOccurred(), "Failed to determine ptp4l config for node %s", nodeInfo.Name)
+				}
+
+				By("waiting for the ptp4l clock class to transition to 6 on metrics")
+
+				clockClassQuery := metrics.ClockClassQuery{
+					Node:    metrics.Equals(nodeInfo.Name),
+					Process: metrics.Equals(metrics.ProcessPTP4L),
+					Config:  metrics.Equals(configFile),
+				}
+				err = metrics.AssertQuery(
+					context.TODO(),
+					prometheusAPI,
+					clockClassQuery,
+					metrics.ClockClass6,
+					metrics.AssertWithStableDuration(10*time.Second),
+					metrics.AssertWithTimeout(5*time.Minute),
+					metrics.AssertWithStartTime(startTime),
+				)
+				Expect(err).ToNot(HaveOccurred(), "Failed to assert clock class 6 state on node %s", nodeInfo.Name)
 			}
 
-			testRanAtLeastOnce = true
-
-			By("getting the gpsd PID")
-
-			oldGpsdPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Gpsd)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get gpsd PID for node %s", nodeInfo.Name)
-
-			startTime := time.Now()
-
-			By("killing the gpsd process twice")
-
-			err = processes.KillPtpProcessMultipleTimes(RANConfig.Spoke1APIClient,
-				nodeInfo.Name, processes.Gpsd, 2)
-			Expect(err).ToNot(HaveOccurred(), "Failed to kill gpsd process for node %s", nodeInfo.Name)
-
-			var clockClassFilter events.EventFilter
-
-			clockClassValue := int64(7)
-			if !clockClass7Supported {
-				clockClassValue = int64(248)
+			if !testRanAtLeastOnce {
+				Skip("No GM nodes found")
 			}
-
-			clockClassFilter = events.All(
-				events.IsType(eventptp.PtpClockClassChange),
-				events.HasValue(
-					events.WithMetric(clockClassValue),
-					events.ContainingResource(string(iface.Master)),
-				),
-			)
-
-			By("waiting for a event.sync.ptp-status.ptp-clock-class-change to " +
-				strconv.FormatInt(clockClassValue, 10) + " on the consumer pod")
-
-			eventPod, err := consumer.GetConsumerPodforNode(RANConfig.Spoke1APIClient, nodeInfo.Name)
-
-			Expect(err).ToNot(HaveOccurred(), "Failed to get event pod for node %s", nodeInfo.Name)
-			err = events.WaitForEvent(
-				eventPod, startTime, 3*time.Minute, clockClassFilter, events.WithoutCurrentState(true))
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for consumer clock class change event on node %s", nodeInfo.Name)
-
-			By("waiting for the all clocks state to transition back to LOCKED")
-
-			lockedQuery := metrics.ClockStateQuery{
-				Node: metrics.Equals(nodeInfo.Name),
-			}
-			err = metrics.AssertQuery(
-				context.TODO(),
-				prometheusAPI,
-				lockedQuery,
-				metrics.ClockStateLocked,
-				metrics.AssertWithStableDuration(10*time.Second),
-				metrics.AssertWithTimeout(5*time.Minute),
-				metrics.AssertWithStartTime(startTime),
-			)
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert all clocks are LOCKED on node %s", nodeInfo.Name)
-
-			By("getting the new gpsd PID")
-
-			newGpsdPID, err := processes.GetPID(RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Gpsd)
-			Expect(err).ToNot(HaveOccurred(), "Failed to get gpsd PID for node %s", nodeInfo.Name)
-			Expect(newGpsdPID).NotTo(Equal(oldGpsdPID), "gpsd PID did not change: "+oldGpsdPID)
-
-			clockClassFilter = events.All(
-				events.IsType(eventptp.PtpClockClassChange),
-				events.HasValue(
-					events.WithMetric(6),
-					events.ContainingResource(string(iface.Master)),
-				),
-			)
-
-			By("waiting for event.sync.ptp-status.ptp-clock-class-change to 6")
-
-			err = events.WaitForEvent(
-				eventPod, startTime, 3*time.Minute, clockClassFilter, events.WithoutCurrentState(true))
-			Expect(err).ToNot(HaveOccurred(), "Failed to wait for consumer clock class change event on node %s", nodeInfo.Name)
-
-			var configFile string
-			if configSupported {
-				configFile, err = processes.GetPtp4lConfigByRelatedProcess(
-					RANConfig.Spoke1APIClient, nodeInfo.Name, processes.Ts2phc)
-				Expect(err).ToNot(HaveOccurred(), "Failed to determine ptp4l config for node %s", nodeInfo.Name)
-			}
-
-			By("waiting for the ptp4l clock class to transition to 6 on metrics")
-
-			clockClassQuery := metrics.ClockClassQuery{
-				Node:    metrics.Equals(nodeInfo.Name),
-				Process: metrics.Equals(metrics.ProcessPTP4L),
-				Config:  metrics.Equals(configFile),
-			}
-			err = metrics.AssertQuery(
-				context.TODO(),
-				prometheusAPI,
-				clockClassQuery,
-				metrics.ClockClass6,
-				metrics.AssertWithStableDuration(10*time.Second),
-				metrics.AssertWithTimeout(5*time.Minute),
-				metrics.AssertWithStartTime(startTime),
-			)
-			Expect(err).ToNot(HaveOccurred(), "Failed to assert clock class 6 state on node %s", nodeInfo.Name)
-		}
-
-		if !testRanAtLeastOnce {
-			Skip("No GM nodes found")
-		}
+		})
 	})
 })

@@ -54,6 +54,10 @@ var _ = Describe("PTP GNSS with NTP Fallback", Label(tsparams.LabelNTPFallback),
 		atLeast420, err = version.IsVersionStringInRange(ptpVersion, "4.20.0-0", "")
 		Expect(err).ToNot(HaveOccurred(), "Failed to check if PTP version is at least 4.20")
 
+		skipIfNoNodeHasProfileTypes(
+			"No NTP fallback profiles found — ntpfailover tests not applicable",
+			profiles.ProfileTypeNTPFallback)
+
 		By("creating a Prometheus API client")
 
 		prometheusAPI, err = querier.CreatePrometheusAPIForCluster(RANConfig.Spoke1APIClient)
