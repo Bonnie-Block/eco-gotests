@@ -78,6 +78,8 @@ func failIfClocksRemainUnlocked(prometheusAPI prometheusv1.API, firstErr error, 
 func recoverClockLockFromSuiteBaseline(prometheusAPI prometheusv1.API) error {
 	startTime := time.Now()
 
+	// Spec AfterEach already restores that spec's snapshot. This reapplies the suite-start
+	// CRs when clocks are still unlocked (no-op if they already match).
 	changedProfiles, err := harness.RestoreBaseline(RANConfig.Spoke1APIClient)
 	if err != nil {
 		return err
