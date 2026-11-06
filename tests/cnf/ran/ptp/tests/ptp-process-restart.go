@@ -555,14 +555,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 					Expect(err).ToNot(HaveOccurred(), "Failed to assert clock class 6 state on node %s", nodeInfo.Name)
 				}
 			})
-	})
-
-	Context("sidecar container recovery", func() {
-		BeforeEach(func() {
-			skipIfNoNodeHasProfileTypes(
-				"Test requires Grandmaster configuration",
-				profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
-		})
 
 		// 84297 - should verify events are logged during sidecar recovery
 		It("should verify events are logged during sidecar recovery", reportxml.ID("84297"), func() {
@@ -659,13 +651,6 @@ var _ = Describe("PTP Process Restart", Label(tsparams.LabelProcessRestart), fun
 				)
 				Expect(err).ToNot(HaveOccurred(), "Failed to wait for clock class 6 event on node %s", nodeInfo.Name)
 			}
-		})
-	})
-
-	Context("T-GM process recovery", func() {
-		BeforeEach(func() {
-			skipIfNoNodeHasProfileTypes(
-				"No GM nodes found", profiles.ProfileTypeGM, profiles.ProfileTypeMultiNICGM)
 		})
 
 		It("Validates T-GM config ptp4l process recover after restart that process", reportxml.ID("59864"), func() {
