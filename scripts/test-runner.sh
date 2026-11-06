@@ -6,6 +6,16 @@ GOPATH="${GOPATH:-~/go}"
 PATH="${PATH}:${GOPATH}/bin"
 readonly TEST_DIR="./tests"
 
+# Jenkins overlays a checkout with `cp -r /eco-gotests/*` into the image workdir.
+# That merge leaves image-only vendor paths that are absent from modules.txt and
+# break builds under -mod=vendor. Replace vendor from the mounted checkout.
+if [[ -d /eco-gotests/vendor ]]; then
+    echo "Syncing vendor from /eco-gotests to avoid image vendor leftovers"
+    rm -rf ./vendor
+    cp -a /eco-gotests/vendor ./vendor
+    cp -a /eco-gotests/go.mod /eco-gotests/go.sum .
+fi
+
 # Check that ECO_TEST_FEATURES environment variable has been set
 if [[ -z "${ECO_TEST_FEATURES:-}" ]]; then
     echo "ECO_TEST_FEATURES environment variable is undefined"
